@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum SafetyPolicyError: LocalizedError {
     case refused(String)
@@ -31,6 +32,8 @@ struct SafetyPolicy: Sendable {
         guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
             throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
         }
+        try rejectSymlinkedAncestors(of: url)
+        try verifyIdentity(of: url, expected: candidate.identity)
 
         let exactTargets = [
             home.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
@@ -53,21 +56,29 @@ struct SafetyPolicy: Sendable {
 
         throw SafetyPolicyError.refused("The path is outside DiskSage’s cleanup allowlist.")
     }
-}
 
-struct CleanupService: Sendable {
-    let policy = SafetyPolicy()
-
-    func delete(_ candidates: [CleanupCandidate]) async throws -> Int64 {
-        try await Task.detached(priority: .utility) {
-            var removed: Int64 = 0
-            for candidate in candidates {
-                try policy.validate(candidate)
-                guard FileManager.default.fileExists(atPath: candidate.url.path) else { continue }
-                try FileManager.default.removeItem(at: candidate.url)
-                removed += candidate.size
+    private func rejectSymlinkedAncestors(of url: URL) throws {
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in url.pathComponents.dropFirst() {
+            current.append(path: component)
+            var info = stat()
+            guard lstat(current.path, &info) == 0 else {
+                if errno == ENOENT { return }
+                throw SafetyPolicyError.refused("Unable to verify \(current.path).")
             }
-            return removed
-        }.value
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                throw SafetyPolicyError.refused("A symlinked path component is not allowed: \(current.path)")
+            }
+        }
+    }
+
+    private func verifyIdentity(of url: URL, expected: FileIdentity) throws {
+        guard expected.device != 0 || expected.inode != 0 else { return }
+        var info = stat()
+        guard lstat(url.path, &info) == 0,
+              UInt64(info.st_dev) == expected.device,
+              UInt64(info.st_ino) == expected.inode else {
+            throw SafetyPolicyError.refused("The item changed after it was scanned. Scan again before deleting it.")
+        }
     }
 }

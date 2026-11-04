@@ -22,4 +22,19 @@ struct DiskScannerTests {
             !executable.path.hasPrefix(candidate.url.standardizedFileURL.path + "/")
         })
     }
+
+    @Test
+    func packageDirectoriesContributeTheirContentsToSize() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "DiskSage-size-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Example.app", directoryHint: .isDirectory)
+        let resources = app.appending(path: "Contents/Resources", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try Data(repeating: 0xA5, count: 64 * 1024)
+            .write(to: resources.appending(path: "payload.bin"))
+
+        let size = try #require(DiskScanner.allocatedSize(of: root))
+        #expect(size >= 64 * 1024)
+    }
 }

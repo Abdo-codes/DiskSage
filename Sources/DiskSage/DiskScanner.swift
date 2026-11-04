@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct DiskScanner: Sendable {
     private struct Seed: Sendable {
@@ -7,6 +8,7 @@ struct DiskScanner: Sendable {
         let category: CandidateCategory
         let risk: RiskLevel
         let reason: String
+        let deletionMode: DeletionMode
     }
 
     func scan() async -> [CleanupCandidate] {
@@ -26,35 +28,40 @@ struct DiskScanner: Sendable {
                 name: "Xcode DerivedData",
                 category: .build,
                 risk: .low,
-                reason: "Generated indexes and build products; Xcode recreates them."
+                reason: "Generated indexes and build products; Xcode recreates them.",
+                deletionMode: .contents
             ),
             Seed(
                 url: home.appending(path: "Library/Developer/Xcode/Archives", directoryHint: .isDirectory),
                 name: "Xcode Archives",
                 category: .archive,
                 risk: .high,
-                reason: "Contains shipped archives and dSYMs. Delete only when no longer needed."
+                reason: "Contains shipped archives and dSYMs. Delete only when no longer needed.",
+                deletionMode: .contents
             ),
             Seed(
                 url: home.appending(path: "Library/Developer/CoreSimulator/Devices", directoryHint: .isDirectory),
                 name: "Simulator Devices",
                 category: .simulator,
                 risk: .high,
-                reason: "Removes installed simulator device state and app data."
+                reason: "Removes installed simulator device state and app data.",
+                deletionMode: .simulatorDevices
             ),
             Seed(
                 url: home.appending(path: ".npm/_cacache", directoryHint: .isDirectory),
                 name: "npm Package Cache",
                 category: .cache,
                 risk: .low,
-                reason: "Downloaded npm packages; npm restores them when needed."
+                reason: "Downloaded npm packages; npm restores them when needed.",
+                deletionMode: .item
             ),
             Seed(
                 url: URL(fileURLWithPath: "/private/var/tmp/_bazel_\(NSUserName())", isDirectory: true),
                 name: "Bazel Output Cache",
                 category: .build,
                 risk: .low,
-                reason: "Generated Bazel output and repository cache."
+                reason: "Generated Bazel output and repository cache.",
+                deletionMode: .item
             )
         ]
 
@@ -69,7 +76,8 @@ struct DiskScanner: Sendable {
                     name: child.lastPathComponent,
                     category: .cache,
                     risk: .low,
-                    reason: "Application or command-line cache; it can be regenerated."
+                    reason: "Application or command-line cache; it can be regenerated.",
+                    deletionMode: .item
                 )
             }
         }
@@ -81,7 +89,8 @@ struct DiskScanner: Sendable {
                 name: relative,
                 category: .build,
                 risk: url.lastPathComponent == "build" ? .medium : .low,
-                reason: "Generated project build output. Review generic build folders before deletion."
+                reason: "Generated project build output. Review generic build folders before deletion.",
+                deletionMode: .item
             )
         }
 
@@ -92,6 +101,7 @@ struct DiskScanner: Sendable {
                   fileManager.fileExists(atPath: url.path),
                   !isSymbolicLink(url),
                   !containsRunningExecutable(url),
+                  let identity = fileIdentity(of: url),
                   let size = allocatedSize(of: url),
                   size > 0 else {
                 return nil
@@ -102,7 +112,9 @@ struct DiskScanner: Sendable {
                 category: seed.category,
                 size: size,
                 risk: seed.risk,
-                reason: seed.reason
+                reason: seed.reason,
+                identity: identity,
+                deletionMode: seed.deletionMode
             )
         }
         .sorted { $0.size > $1.size }
@@ -145,7 +157,7 @@ struct DiskScanner: Sendable {
                   values.isSymbolicLink != true else { continue }
 
             let allowedNames = [".build", "build", "DerivedData", "derived-data"]
-            if allowedNames.contains(url.lastPathComponent) {
+            if allowedNames.contains(url.lastPathComponent), isLikelyGeneratedBuildDirectory(url) {
                 results.append(url)
                 enumerator.skipDescendants()
             }
@@ -162,7 +174,28 @@ struct DiskScanner: Sendable {
         return executable.path.hasPrefix(url.path + "/")
     }
 
-    private static func allocatedSize(of root: URL) -> Int64? {
+    private static func isLikelyGeneratedBuildDirectory(_ url: URL) -> Bool {
+        guard url.lastPathComponent == "build" else { return true }
+        let projectRoot = url.deletingLastPathComponent()
+        let markers = ["Package.swift", "project.yml", "build.gradle", "build.gradle.kts", "pom.xml"]
+        if markers.contains(where: { FileManager.default.fileExists(atPath: projectRoot.appending(path: $0).path) }) {
+            return true
+        }
+        guard let siblings = try? FileManager.default.contentsOfDirectory(
+            at: projectRoot,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+        return siblings.contains { ["xcodeproj", "xcworkspace"].contains($0.pathExtension) }
+    }
+
+    private static func fileIdentity(of url: URL) -> FileIdentity? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return nil }
+        return FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    static func allocatedSize(of root: URL) -> Int64? {
         let keys: Set<URLResourceKey> = [
             .isRegularFileKey,
             .isSymbolicLinkKey,
@@ -172,7 +205,7 @@ struct DiskScanner: Sendable {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: Array(keys),
-            options: [.skipsPackageDescendants],
+            options: [],
             errorHandler: { _, _ in true }
         ) else {
             let values = try? root.resourceValues(forKeys: keys)

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import DiskSage
 
@@ -63,6 +64,66 @@ struct SafetyPolicyTests {
         )
         #expect(throws: SafetyPolicyError.self) {
             try policy.validate(candidate)
+        }
+    }
+
+    @Test
+    func rejectsSymlinkedAncestor() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let external = FileManager.default.temporaryDirectory
+            .appending(path: "DiskSage-external-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: external) }
+        let build = external.appending(path: "build", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+        let link = fixture.root.appending(path: "linked-project")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
+
+        let candidate = CleanupCandidate(
+            url: link.appending(path: "build", directoryHint: .isDirectory),
+            name: "build",
+            category: .build,
+            size: 1,
+            risk: .medium,
+            reason: "Fixture"
+        )
+        #expect(throws: SafetyPolicyError.self) {
+            try policy.validate(candidate)
+        }
+    }
+
+    @Test
+    func rejectsChangedIdentity() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let build = fixture.root.appending(path: "build", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+
+        let candidate = CleanupCandidate(
+            url: build,
+            name: "build",
+            category: .build,
+            size: 1,
+            risk: .medium,
+            reason: "Fixture",
+            identity: FileIdentity(device: UInt64.max, inode: UInt64.max)
+        )
+        #expect(throws: SafetyPolicyError.self) {
+            try policy.validate(candidate)
+        }
+    }
+
+    private struct Fixture {
+        let root: URL
+
+        init() throws {
+            root = FileManager.default.homeDirectoryForCurrentUser
+                .appending(path: "Developer/.disksage-test-\(UUID().uuidString)", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+
+        func remove() {
+            try? FileManager.default.removeItem(at: root)
         }
     }
 }

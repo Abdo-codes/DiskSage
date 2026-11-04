@@ -18,7 +18,7 @@ struct DiskSageApp: App {
         .defaultSize(width: 900, height: 620)
 
         Settings {
-            SettingsView()
+            SettingsView(model: model)
         }
     }
 }
@@ -26,8 +26,10 @@ struct DiskSageApp: App {
 struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
-    @AppStorage("codexExecutablePath") private var codexExecutablePath = "/opt/homebrew/bin/codex"
+    @AppStorage("codexExecutablePath") private var codexExecutablePath = ""
     @AppStorage("codexModel") private var codexModel = ""
+    @AppStorage("agentMetadataConsent") private var agentMetadataConsent = false
+    @State private var showsAgentConsent = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -66,12 +68,16 @@ struct MenuBarView: View {
                 Button("Scan", systemImage: "arrow.clockwise") {
                     model.scan()
                 }
-                .disabled(model.isScanning)
+                .disabled(model.isBusy)
 
                 Button("Ask Codex", systemImage: "sparkles") {
-                    model.askCodex(executablePath: codexExecutablePath, model: codexModel)
+                    if agentMetadataConsent {
+                        model.askCodex(executablePath: codexExecutablePath, model: codexModel)
+                    } else {
+                        showsAgentConsent = true
+                    }
                 }
-                .disabled(model.candidates.isEmpty || model.isAdvising)
+                .disabled(model.candidates.isEmpty || model.isBusy)
             }
 
             Button("Review \(model.candidates.count) Candidates", systemImage: "list.bullet.rectangle") {
@@ -80,6 +86,12 @@ struct MenuBarView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.candidates.isEmpty)
+
+            if model.isBusy {
+                Button("Cancel Current Operation", role: .cancel) {
+                    model.cancelCurrentOperation()
+                }
+            }
 
             Divider()
 
@@ -100,6 +112,15 @@ struct MenuBarView: View {
             if model.candidates.isEmpty {
                 model.scan()
             }
+        }
+        .alert("Send cleanup metadata to Codex?", isPresented: $showsAgentConsent) {
+            Button("Allow and Continue") {
+                agentMetadataConsent = true
+                model.askCodex(executablePath: codexExecutablePath, model: codexModel)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("DiskSage sends category, size, risk, and reason to your configured Codex provider. File paths and project names are excluded.")
         }
     }
 }
