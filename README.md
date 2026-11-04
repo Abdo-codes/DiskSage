@@ -13,7 +13,6 @@ scanner and deletion policy remain in control of filesystem access.
 [Agent choices](#agent-choices) · [MCP setup](#connect-claude-code-codex-or-another-mcp-client) ·
 [Development](#development)
 
-> This guide covers the current development branch, `feat/cleanup-logging`.
 > Deletion is permanent: items do not go to the Trash. Low-disk automatic cleanup
 > is enabled by default at **15 GiB**. Use the review-only launch option below
 > if you want to inspect candidates before allowing background cleanup.
@@ -43,7 +42,7 @@ scanner and deletion policy remain in control of filesystem access.
 ### Build and open
 
 ```sh
-git clone --branch feat/cleanup-logging https://github.com/Abdo-codes/DiskSage.git
+git clone https://github.com/Abdo-codes/DiskSage.git
 cd DiskSage
 ./Scripts/build-app.sh release
 ```

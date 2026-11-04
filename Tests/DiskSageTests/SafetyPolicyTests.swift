@@ -10,7 +10,8 @@ struct SafetyPolicyTests {
     func allowsDerivedData() throws {
         let candidate = CleanupCandidate(
             url: FileManager.default.homeDirectoryForCurrentUser
-                .appending(path: "Library/Developer/Xcode/DerivedData"),
+                // Match the scanner even on a fresh host without DerivedData.
+                .appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
             name: "DerivedData",
             category: .build,
             size: 1,
