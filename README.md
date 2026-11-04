@@ -1,7 +1,9 @@
 # DiskSage
 
+![DiskSage — Developer disk cleanup for macOS](Resources/Branding/DiskSage-banner.png)
+
 DiskSage is an open-source macOS menu-bar app that finds regenerable developer
-files, offers Claude, Codex, Apple on-device, and Ollama cleanup advisors, and keeps
+files, offers Claude, Codex, Apple on-device, and Ollama cleanup advisors, and
 provides configurable cleanup controls.
 
 The dashboard shows a live disk-capacity ring, estimated cleanup sizes by
@@ -68,6 +70,12 @@ The Settings window can launch DiskSage at login and automatically clean safe
 items when available disk space falls below a configurable threshold (15 GiB by
 default). Archives, simulator devices, and generic `build` directories are
 never included in automatic cleanup.
+
+The app icon master is `Resources/AppIcon.png` (1024 × 1024, transparent).
+`Scripts/build-icon.sh` generates all standard macOS icon sizes and packages them
+as `.build/branding/AppIcon.icns`; the app build includes the same icon in its
+signed bundle. The matching 1280 × 640 repository banner is
+`Resources/Branding/DiskSage-banner.png`.
 
 Cleanup progress shows completed target folders and a live count of removed files
 and folders. Updates are throttled and delivered separately from filesystem work,
