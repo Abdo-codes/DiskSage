@@ -27,6 +27,14 @@ rm -rf "$app_path"
 mkdir -p "$contents_path/MacOS" "$contents_path/Resources"
 cp "$binary_path" "$contents_path/MacOS/DiskSage"
 
+# SwiftPM dependencies locate their resource bundles through Bundle.main.resourceURL.
+shopt -s nullglob
+for resource_bundle in "$(dirname -- "$binary_path")"/*.bundle; do
+  ditto "$resource_bundle" "$contents_path/Resources/$(basename -- "$resource_bundle")"
+done
+
+"$project_dir/Scripts/build-icon.sh" "$contents_path/Resources/AppIcon.icns"
+
 sed "s/__VERSION__/$version/g" "$project_dir/Resources/Info.plist.template" > "$contents_path/Info.plist"
 plutil -lint "$contents_path/Info.plist" >/dev/null
 codesign --force --deep --sign - "$app_path"

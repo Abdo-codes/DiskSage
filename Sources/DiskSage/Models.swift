@@ -88,7 +88,7 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-struct AgentRecommendation: Codable, Sendable {
+struct AgentRecommendation: Equatable, Codable, Sendable {
     enum Decision: String, Codable, Sendable {
         case delete
         case keep
@@ -100,12 +100,13 @@ struct AgentRecommendation: Codable, Sendable {
     let rationale: String
 }
 
-struct AgentResponse: Codable, Sendable {
+struct AgentResponse: Equatable, Codable, Sendable {
     let summary: String
     let recommendations: [AgentRecommendation]
+    var cleanupRequested: Bool? = nil
 }
 
-struct CleanupItemResult: Sendable {
+struct CleanupItemResult: Equatable, Sendable {
     let candidate: CleanupCandidate
     let removedBytes: Int64
     let errorDescription: String?
@@ -113,10 +114,12 @@ struct CleanupItemResult: Sendable {
     var succeeded: Bool { errorDescription == nil }
 }
 
-struct CleanupReport: Sendable {
+struct CleanupReport: Equatable, Sendable {
     let items: [CleanupItemResult]
     let freeSpaceBefore: Int64
     let freeSpaceAfter: Int64
+    var loggingError: String? = nil
+    var removedEntryCount = 0
 
     var estimatedRemovedBytes: Int64 {
         items.filter(\.succeeded).reduce(0) { $0 + $1.removedBytes }
