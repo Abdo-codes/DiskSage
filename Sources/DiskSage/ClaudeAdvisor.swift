@@ -47,7 +47,7 @@ struct ClaudeAdvisor: Sendable {
             throw AdvisorError.invalidResponse
         }
         guard envelope.subtype == "success", envelope.is_error != true else {
-            throw AdvisorError.failed("Claude review failed. Check your CLI sign-in with ‘claude auth login’. (\(envelope.subtype))")
+            throw AdvisorError.failed(ClaudeFailureMessage.describe(data))
         }
         if let response = envelope.structured_output { return response }
         if let result = envelope.result,
@@ -100,10 +100,11 @@ struct ClaudeAdvisor: Sendable {
             }
             throw AdvisorError.timedOut
         }
-        guard process.terminationStatus == 0 else {
-            throw AdvisorError.failed("Claude exited with status \(process.terminationStatus). Run ‘claude auth login’ in Terminal, then try again.")
-        }
         let size = try output.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard process.terminationStatus == 0 else {
+            let data = size <= 2_000_000 ? try? Data(contentsOf: output) : nil
+            throw AdvisorError.failed(ClaudeFailureMessage.describe(data, exitStatus: process.terminationStatus))
+        }
         guard size <= 2_000_000 else { throw AdvisorError.invalidResponse }
         return try Self.decode(Data(contentsOf: output))
     }

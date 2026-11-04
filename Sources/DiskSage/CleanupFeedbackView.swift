@@ -31,8 +31,9 @@ struct CleanupFeedbackView: View {
                 }
                 if let error = report.loggingError { Text(error).foregroundStyle(.red) }
                 HStack {
-                    Text("Available space: \(report.freeSpaceAfter.diskSize). Disk space can take time to update.")
+                    Text("Available space immediately after cleanup: \(report.freeSpaceAfter.diskSize).")
                         .font(.caption).foregroundStyle(.secondary)
+                        .help("This is the completion snapshot. The dashboard shows current available space.")
                     Spacer()
                     Button("Open History") { showHistory() }
                 }

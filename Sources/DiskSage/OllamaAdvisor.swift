@@ -38,7 +38,8 @@ struct OllamaAdvisor: Sendable {
                 let done: Bool
                 let done_reason: String?
             }
-            guard let reply = try? JSONDecoder().decode(Reply.self, from: await transport(request)),
+            let data = try await transport(request)
+            guard let reply = try? JSONDecoder().decode(Reply.self, from: data),
                   reply.done, reply.done_reason != "length" else {
                 throw AdvisorError.invalidResponse
             }
@@ -82,10 +83,22 @@ struct OllamaAdvisor: Sendable {
         catch let error as URLError where error.code == .cancelled { throw CancellationError() }
         catch let error as URLError where error.code == .timedOut { throw AdvisorError.timedOut }
         catch { throw AdvisorError.unavailable("Could not reach Ollama at localhost:11434. Start Ollama and try again.") }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            struct Failure: Decodable { let error: String }
-            let message = (try? JSONDecoder().decode(Failure.self, from: data).error) ?? "Request failed."
-            throw AdvisorError.failed("Ollama: \(message.prefix(300))")
+        return try validateResponse(data, response: response)
+    }
+
+    static func validateResponse(_ data: Data, response: URLResponse) throws -> Data {
+        guard let http = response as? HTTPURLResponse else {
+            throw AdvisorError.failed("Ollama returned an invalid HTTP response.")
+        }
+        guard http.statusCode == 200 else {
+            let guidance: String
+            switch http.statusCode {
+            case 401, 403: guidance = "Check your Ollama sign-in or choose a local model."
+            case 404, 410: guidance = "Refresh models in Settings or choose another model."
+            case 429: guidance = "Check your Ollama usage limit or try again later."
+            default: guidance = "Try again or check that Ollama is running."
+            }
+            throw AdvisorError.failed("Ollama request failed (HTTP \(http.statusCode)). \(guidance)")
         }
         guard data.count <= 2_000_000 else { throw AdvisorError.invalidResponse }
         return data

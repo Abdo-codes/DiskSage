@@ -26,6 +26,7 @@ struct MenuBarView: View {
         .frame(width: 368, height: heightLimit)
         .fixedSize(horizontal: false, vertical: heightLimit == nil)
         .foregroundStyle(.primary)
+        .background(DashboardTheme.readingSurface)
     }
 }
 
@@ -102,7 +103,7 @@ private struct DashboardHeader: View {
             Image(systemName: "externaldrive.badge.checkmark").font(.title2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("DiskSage").font(.headline)
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(status)
+                Text(status).font(.caption).foregroundStyle(DashboardTheme.muted).lineLimit(1).help(status)
             }
             Spacer(minLength: 4)
             if working {

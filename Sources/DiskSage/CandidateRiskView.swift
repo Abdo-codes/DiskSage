@@ -17,7 +17,6 @@ struct CandidateRiskView: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(candidate.risk.title)
-                .foregroundStyle(candidate.risk == .low ? .green : (candidate.risk == .medium ? .orange : .red))
             Button { showsDetails = true } label: { Image(systemName: "info.circle") }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Risk and deletion details for \(candidate.name)")
@@ -42,6 +41,8 @@ private struct CandidateDetailsView: View {
             Text(candidate.url.path).font(.caption).foregroundStyle(.secondary)
                 .textSelection(.enabled)
         }
+        .lineLimit(nil)
+        .multilineTextAlignment(.leading)
         .padding(16)
         .frame(width: 340, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)

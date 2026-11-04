@@ -25,12 +25,12 @@ struct AgentReviewButton: View {
         VStack(alignment: .leading, spacing: 5) {
             if compact {
                 actionButton.modifier(DashboardActionStyle()).controlSize(.large)
-                Text(policyDescription).font(.caption).foregroundStyle(.secondary)
+                Text(policyDescription).font(.caption).foregroundStyle(DashboardTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 actionButton
             }
-            AgentReadinessView(readiness: currentReadiness, provider: provider)
+            AgentReadinessView(readiness: currentReadiness, provider: provider, compact: compact)
         }
         .task(id: ReadinessRequest(configuration: configuration, refreshCount: refreshCount)) {
             let request = configuration

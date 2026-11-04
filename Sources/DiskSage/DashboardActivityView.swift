@@ -11,7 +11,7 @@ struct DashboardActivityView: View {
                 Text("Last cleanup").font(.subheadline.weight(.semibold))
                 if let event = events.first {
                     Text(event.timestamp, format: .dateTime.hour().minute())
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(DashboardTheme.muted)
                         .help(event.timestamp.formatted(date: .complete, time: .shortened))
                 }
                 Spacer()
@@ -29,7 +29,7 @@ struct DashboardActivityView: View {
                     DashboardWarning(message: "\(event.failedCount) failed; partial removal is possible.")
                 }
             } else {
-                Text("No completed cleanup yet.").font(.callout).foregroundStyle(.secondary)
+                Text("No completed cleanup yet.").font(.callout).foregroundStyle(DashboardTheme.muted)
             }
         }
     }

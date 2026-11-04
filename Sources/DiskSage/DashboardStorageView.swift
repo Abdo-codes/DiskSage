@@ -33,7 +33,7 @@ private struct DiskUsageRing: View {
             VStack(spacing: 1) {
                 Text(usage.usedFraction, format: .percent.precision(.fractionLength(0)))
                     .font(.headline)
-                Text("used").font(.caption).foregroundStyle(.secondary)
+                Text("used").font(.caption).foregroundStyle(DashboardTheme.muted)
             }
         }
         .frame(width: 64, height: 64).padding(5)
@@ -60,7 +60,7 @@ struct CleanupOverviewCard: View {
                     if scanning { Text("Scanning…") }
                     else if hasScanned { Text("\(count) items") }
                     else { Text("Not scanned yet") }
-                }.font(.callout).foregroundStyle(.secondary)
+                }.font(.callout).foregroundStyle(DashboardTheme.muted)
             }
             HStack(spacing: 18) {
                 RiskEstimate(label: "Low risk", bytes: breakdown.lowRiskBytes,
@@ -83,13 +83,13 @@ struct CleanupOverviewCard: View {
                     }
                 }
                 .font(.callout)
-                Text("Sizes are estimates.").font(.caption).foregroundStyle(.secondary)
+                Text("Sizes are estimates.").font(.caption).foregroundStyle(DashboardTheme.muted)
             } else {
                 Group {
                     if scanning { Text("Finding caches and generated files…") }
                     else if hasScanned { Text("No cleanup candidates in the last scan.") }
                     else { Text("Scan to find generated files and caches.") }
-                }.font(.callout).foregroundStyle(.secondary)
+                }.font(.callout).foregroundStyle(DashboardTheme.muted)
             }
         }
     }

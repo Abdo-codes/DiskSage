@@ -1,7 +1,8 @@
 import SwiftUI
 
 enum DashboardTheme {
-    static let muted = Color.secondary
+    static let muted = Color(nsColor: .labelColor).opacity(0.9)
+    static let readingSurface = Color(nsColor: .windowBackgroundColor).opacity(0.86)
     static let mint = Color.green
     static let blue = Color.accentColor
     static let amber = Color.orange

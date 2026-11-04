@@ -4,6 +4,7 @@ import SwiftUI
 struct AgentReadinessView: View {
     let readiness: AgentReadiness?
     let provider: AgentProvider
+    var compact = false
 
     var body: some View {
         switch readiness {
@@ -12,11 +13,11 @@ struct AgentReadinessView: View {
                 ProgressView().controlSize(.mini)
                 Text("Checking \(provider.title)…")
             }
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(compact ? DashboardTheme.muted : Color.secondary)
         case .ready:
             Label(provider == .claude || provider == .codex ? "CLI found · uses your existing sign-in" : "Ready for metadata review",
                   systemImage: "checkmark.circle")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(compact ? DashboardTheme.muted : Color.secondary)
         case let .unavailable(reason):
             VStack(alignment: .leading, spacing: 4) {
                 Label(reason, systemImage: "exclamationmark.triangle")

@@ -135,8 +135,9 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         model.refreshDashboard()
         if historyWindow == nil {
             let window = makeWindow(title: "DiskSage Cleanup History", width: 720, height: 520, resizable: true)
-            window.contentViewController = NSHostingController(rootView: CleanupHistoryView(model: model))
-            window.minSize = NSSize(width: 620, height: 400)
+            HostedWindowSizing.configure(window, content: CleanupHistoryView(model: model),
+                minimum: NSSize(width: 620, height: 400), preferred: NSSize(width: 720, height: 520),
+                frameName: "CleanupHistory")
             historyWindow = window
         }
         historyWindow?.makeKeyAndOrderFront(nil)
