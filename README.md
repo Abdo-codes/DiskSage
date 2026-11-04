@@ -2,238 +2,269 @@
 
 ![DiskSage — Developer disk cleanup for macOS](Resources/Branding/DiskSage-banner.png)
 
-DiskSage is an open-source macOS menu-bar app that finds regenerable developer
-files, offers Claude, Codex, Apple on-device, and Ollama cleanup advisors, and
-provides configurable cleanup controls.
+A native macOS menu-bar app for finding developer build artifacts and caches,
+reviewing cleanup decisions, and seeing exactly what was removed.
 
-The dashboard shows a live disk-capacity ring, estimated cleanup sizes by
-category, and recent logged activity. Available space follows macOS important-use
-capacity and may include purgeable space. Cleanup estimates are scan candidates,
-not a partition of disk usage. The panel is anchored to its menu-bar button;
-reopening the app from Applications also reveals it.
+Use the rule-based scanner on its own, ask Claude, Codex, Apple on-device, or
+Ollama for metadata-only advice, or connect an agent through MCP. The local
+scanner and deletion policy remain in control of filesystem access.
 
-The compact dashboard separates low-risk candidates from items needing careful
-review. **History** shows completed cleanup runs, the items removed or refused,
-and their timestamps. Routine monitoring checks remain in the full log. Removed
-item size estimates and the observed change in available space are shown
-separately because filesystem reclamation and other apps can affect free space.
+[Quick start](#quick-start) · [Cleanup controls](#cleanup-controls) ·
+[Agent choices](#agent-choices) · [MCP setup](#connect-claude-code-codex-or-another-mcp-client) ·
+[Development](#development)
 
-## Safety model
+> This guide covers the current development branch, `feat/cleanup-logging`.
+> Deletion is permanent: items do not go to the Trash. Low-disk automatic cleanup
+> is enabled by default at **15 GiB**. Use the review-only launch option below
+> if you want to inspect candidates before allowing background cleanup.
 
-- Scanning is deterministic; the agent never discovers filesystem paths.
-- Every agent receives metadata only: a random candidate ID, category, size, risk,
-  and the scanner's generic reason. Paths and project names stay local.
-- Codex uses an ephemeral read-only sandbox. Claude runs without tools, MCP
-  integrations, user customizations, or session persistence. Apple and Ollama
-  receive no filesystem tools.
-- Agent output can only refer to IDs the scanner already produced.
-- A local allowlist validates every path again immediately before deletion.
-- Descriptor-relative deletion rejects symlink swaps, identity changes, and
-  mounted-filesystem boundaries between scanning and deletion.
-- Git directories, broad roots, unknown paths, and symlinks are refused.
-- Archives and simulator devices are marked high-risk and never auto-selected
-  from an agent recommendation.
-- Manual deletion requires confirmation in the review window. Optional low-disk
-  automation only removes scanner-classified low-risk, regenerable items.
-- `~/.cache` and `Library/Caches` subfolders are classified low-risk as
-  regenerable caches, but a few command-line tools keep non-regenerable data
-  there. Review items under those roots before enabling automatic cleanup.
+## What you get
 
-## Requirements
+- A menu-bar dashboard with disk capacity, cleanup estimates by category, and
+  recent activity.
+- Searchable, resizable Review and History windows, with risk explanations and
+  deletion scope beside each candidate.
+- Explicit confirmations for manual deletion, including selections hidden by
+  filters. Cancel scanning or advice requests without losing the current list.
+- Progress for up to four independent cleanup targets, immediate removal of
+  successful rows, and retained failures with explanations.
+- Local cleanup history and rotating logs recording what was attempted and when.
+- Optional advisors and agent tools, with separate consent and cleanup controls.
 
-- macOS 14 or later
-- Xcode 27 or a compatible Swift toolchain
-- Optional: Claude Code or Codex CLI installed and signed in
-- Optional: Apple Intelligence enabled on a supported Mac with macOS 26 or later
-- Optional: Ollama running on localhost:11434 with an available text model
+## Quick start
 
-No API key is stored by DiskSage. CLI providers use your existing sign-in;
-Apple uses the system on-device model, and Ollama uses the local service.
+### Requirements
 
-## Build
+- **Run:** macOS 14 or later.
+- **Build:** Xcode 27 is the tested toolchain; SwiftPM resolves dependencies.
+- **Optional advisors:** see [Agent choices](#agent-choices). No advisor is required
+  to scan, review, or clean files.
+
+### Build and open
 
 ```sh
-git clone <repository-url>
+git clone --branch feat/cleanup-logging https://github.com/Abdo-codes/DiskSage.git
 cd DiskSage
-./Scripts/build-app.sh
+./Scripts/build-app.sh release
+```
+
+For a **review-only first launch**, disable low-disk automation before opening:
+
+```sh
+defaults write com.abdoeaita.DiskSage automaticCleanupEnabled -bool false
+```
+
+Then open the app:
+
+```sh
 open .build/release/DiskSage.app
 ```
 
-For development:
+Click the menu-bar drive icon, scan, and choose **Review items**. Reopening
+DiskSage from Applications also reveals the dashboard. To use launch at login or
+connect external agents, copy the built app to `/Applications/DiskSage.app`.
+
+Local builds are ad-hoc signed, not Developer ID signed or notarized. The tagged
+release workflow packages an app ZIP and SHA-256 checksum; a notarized installer
+is not part of the current build pipeline.
+
+## What DiskSage scans
+
+Each scan shows up to **100 of the largest validated candidates**. Inaccessible,
+empty, symlinked, disallowed, or running-executable targets are excluded.
+
+| Location | Classification | Scope |
+| --- | --- | --- |
+| Xcode DerivedData | Low risk | Generated contents; parent folder remains |
+| Project `.build` folders under `~/Developer` | Low risk | Entire generated folder |
+| Generic project `build` folders under `~/Developer` | Needs review | Entire folder, only after manual selection |
+| npm package cache and per-user Bazel output cache | Low risk | Cache folder |
+| Child folders of `~/Library/Caches` and `~/.cache` | Low risk, with caveat below | Selected cache folder |
+| Xcode Archives | Sensitive | Archives and dSYMs inside the archive folder |
+| Simulator devices | Sensitive | All simulator devices, including installed apps and data |
+
+**Low risk is a classification, not a guarantee that every tool uses its cache
+correctly.** Some tools keep non-regenerable state in cache directories. Review
+those candidates before allowing unattended cleanup. Archives, simulator devices,
+and generic `build` folders are excluded from automatic cleanup.
+
+## Cleanup controls
+
+| Mode | How it starts | Confirmation |
+| --- | --- | --- |
+| Manual selection | Select items in Review, then **Delete Selected** | Always |
+| Clean now | **Clean Low-Risk Items…** in the dashboard or menus | Always; scans first if needed |
+| Low-disk automation | Startup and hourly capacity checks | No additional prompt for low-risk targets |
+| Agent-requested cleanup | MCP tool or an explicitly enabled built-in advisor | Depends on **Agent Tools → Cleanup requests** |
+
+Configure startup, low-disk automation, and the threshold in
+**Settings → General & Safety**. The default threshold is **15 GiB**. Automatic
+cleanup runs a fresh scan and rechecks enablement, threshold, and available space
+before deleting. Its preflight scan can be cancelled.
+
+In Review, use search and risk filters to narrow the list. **Select Visible Low
+Risk** preserves hidden selections; **Clear All** clears them too. The footer
+counts hidden selections, and confirmation lists every selected target.
+
+Once deletion starts, it finishes under the application-owned coordinator.
+Closing a window or disconnecting an agent does not stop it; quitting is blocked
+until the run finishes. Independent targets run concurrently, overlapping targets
+retain their order, and simulator cleanup runs alone. Large trees can take time
+because macOS must unlink their entries individually.
+
+| Shortcut | Action |
+| --- | --- |
+| Command-1 | Open Review |
+| Command-comma | Open Settings |
+| Command-W | Close the current window |
+
+## Agent choices
+
+Choose a provider in **Settings → Agent**. Advanced executable paths and model
+IDs are available for CLI providers; Claude also offers model presets.
+
+| Provider | Requirements | Where metadata is processed |
+| --- | --- | --- |
+| Claude | Claude Code CLI installed and signed in | Through your existing Claude account |
+| Codex | Codex CLI installed and signed in | Through your existing Codex account |
+| Apple on-device | Compatible Mac, macOS 26+, Apple Intelligence enabled and model ready | On this Mac through Foundation Models |
+| Ollama | Service at `localhost:11434` and a selected text model | Local models stay on-device; **Cloud** models use a remote provider |
+
+Each remote-capable provider has separate metadata consent. Approving one does
+not approve the others. Requests contain random candidate IDs, categories, sizes,
+risk levels, and generic reasons—not paths, project names, file contents, or logs.
+DiskSage does not store an API key or download Ollama models.
+
+CLI detection only confirms that an executable exists. It does not verify sign-in,
+quota, or provider availability. Unavailable configurations show setup guidance;
+Apple never silently falls back to a remote provider.
+
+Advisors have no host filesystem tools. Claude runs without built-in/MCP tools,
+user/project customizations, or persistent sessions. Codex uses an ephemeral
+read-only sandbox. Every response must cover the scanned IDs exactly once;
+invalid or cancelled responses leave the selection unchanged. Advice requests
+have a 90-second timeout and can be cancelled.
+
+By default, built-in advisors only recommend. Enabling **Agent Tools → Allow
+built-in advisors to request cleanup** permits a structured host cleanup request
+under the same agent policy described below. The app still validates the request
+and performs a fresh low-risk scan.
+
+## Connect Claude Code, Codex, or another MCP client
+
+Keep the GUI app open. After installing it at `/Applications/DiskSage.app`, use
+**Settings → Agent Tools** to copy a setup command, or run:
+
+```sh
+claude mcp add --transport stdio --scope user disksage -- '/Applications/DiskSage.app/Contents/MacOS/DiskSage' --mcp
+codex mcp add disksage -- '/Applications/DiskSage.app/Contents/MacOS/DiskSage' --mcp
+```
+
+Start a new client session to discover the tools. For another MCP client, choose
+**stdio**, use the app executable as the command, and pass `--mcp` as its argument.
+The stdio process forwards requests to the GUI coordinator over a private,
+same-user Unix socket. Server readiness does not mean a client is connected.
+
+**Settings → Agent Tools → Cleanup requests** has three policies:
+
+- **Confirm in DiskSage** — the default; review and approve each cleanup.
+- **Disabled** — reject cleanup requests; status and scanning remain available.
+- **Allow low-risk cleanup** — authorized requests can permanently delete
+  low-risk targets without another prompt.
+
+This policy is separate from low-disk automation and metadata consent.
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `get_status` | `{}` | Current free space, aggregate counts, busy state, and policy |
+| `scan` | `{"request_id":"<UUID>"}` | Starts a read-only scan and returns a job |
+| `clean_low_risk` | `{"request_id":"<UUID>"}` | Fresh scan, then cleanup under the configured policy |
+| `get_job` | `{"request_id":"<UUID>"}` | Progress or completion for that job |
+
+Use a fresh UUID for each new operation. Retry the same action with its original
+UUID to retrieve its existing job without duplicating work. Busy requests are
+rejected, not queued; retry them later with the same UUID. Paths and risk overrides
+are never accepted as tool arguments.
+
+Poll `get_job` until a terminal phase: `succeeded`, `warnings`, `failed`, or
+`cancelled`. `awaitingConfirmation` requires user action in DiskSage. Acceptance
+is not proof of deletion. Tool replies carry totals, timestamps, and sanitized
+failures; detailed paths remain in local history and logs.
+
+Only the last 100 jobs are retained, for the current app session. An unknown ID
+after restart or eviction is not proof that cleanup ran. Check history before
+starting another request. Client disconnection does not cancel active deletion.
+
+## History, measurements, and safety
+
+History shows completed runs, individual results, and timestamps. **Open log
+folder** reveals `~/Library/Logs/DiskSage/cleanup.jsonl`. Logs include trigger,
+paths, item starts/results, and run summaries. They rotate at **5 MiB**, retain one
+previous file, remain local, and are restricted to the current macOS user.
+
+An item start without a finish means its outcome is unknown. A failure may occur
+after partial removal. If logging fails, no new targets are scheduled; authorized
+workers finish and the app reconciles their results.
+
+Candidate sizes are estimates of allocated space, not a partition of disk usage.
+Available capacity follows macOS important-use capacity and may include purgeable
+space. Shared files, delayed reclamation, and other apps affect the observed
+change. Review labels its retained value **Available space immediately after
+cleanup**; the dashboard shows current capacity.
+
+Every target is checked against a local allowlist immediately before deletion.
+Descriptor-relative deletion rejects symlink swaps, changed identities, and
+mounted-filesystem boundaries. Targets under `.git`, broad roots, paths outside
+the allowlist, and the running executable tree are refused. AI output cannot
+introduce a filesystem path or bypass the host cleanup policy.
+See [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Claude reports a usage limit | Wait for the limit to reset or select another advisor; signing in again does not reset quota |
+| Claude reports missing/expired authentication | Run `claude auth login`, then retry |
+| Ollama cannot be reached | Start Ollama and refresh models in Agent settings |
+| Ollama returns HTTP 404/410 | Refresh models or choose another model; a listed cloud model can still be unavailable upstream |
+| Ollama returns HTTP 401/403 or 429 | Check its sign-in or usage limit; consider another available model |
+| MCP cannot reach DiskSage | Open the GUI app and verify the configured executable path |
+| Deleted estimates and free-space change differ | Check completion timestamps and current dashboard capacity; reclamation is not necessarily immediate |
+
+## Development
 
 ```sh
 swift test
 swift run DiskSage
 ```
 
-The Settings window can launch DiskSage at login and automatically clean safe
-items when available disk space falls below a configurable threshold (15 GiB by
-default). Archives, simulator devices, and generic `build` directories are
-never included in automatic cleanup.
-
-The app icon master is `Resources/AppIcon.png` (1024 × 1024, transparent).
-`Scripts/build-icon.sh` generates all standard macOS icon sizes and packages them
-as `.build/branding/AppIcon.icns`; the app build includes the same icon in its
-signed bundle. The matching 1280 × 640 repository banner is
-`Resources/Branding/DiskSage-banner.png`.
-
-Cleanup progress shows completed target folders and a live count of removed files
-and folders. Updates are throttled and delivered separately from filesystem work,
-so UI processing does not block deletion. Up to four independent targets are
-removed concurrently. Overlapping targets preserve their input order; simulator
-cleanup runs alone. Large individual trees can still take time because
-macOS must unlink their entries individually.
-
-## Architecture and workflow tests
-
-A single application-owned TCA `AppFeature` store coordinates scanning, advisor
-requests, confirmation, manual and automatic cleanup, and MCP jobs. `AppModel`
-is a temporary AppKit/SwiftUI adapter: it reads store state and sends actions,
-without separate workflow state or tasks. Native windows and panel positioning
-remain in AppKit; review filters and settings still use their existing local
-state and preferences during this first migration slice.
-
-Scanner, advisor, cleanup, capacity, history, and preference access are injected
-through `DiskSageClient`. Every operation has an identity; stale responses are
-ignored. Read operations are cancellable, while deletion stays owned by the
-persistent root store. `TestStore`, controlled streams, and `TestClock` cover
-operation arbitration and hourly monitoring without polling or real-time sleeps.
-The existing filesystem, parallel-deletion, logging, and provider tests remain.
-
-## Cleanup logs
-
-Choose **Open Cleanup Logs** in the menu-bar window to open
-`~/Library/Logs/DiskSage`. The local `cleanup.jsonl` log records timestamps,
-manual, automatic, or agent triggers, each target path, successes and errors, and a run
-summary. Hourly checks also record why automatic cleanup ran or was skipped.
-An item-start event without an item-finished event means the outcome is unknown
-(for example, the app quit during deletion). A failed item may have been partially
-removed before an error occurred.
-
-The summary separates the estimated size of removed targets from the observed
-change in available disk space, which other apps can also affect. Logs rotate at
-5 MiB, retaining one previous file, and are readable only by your macOS user.
-They stay local and are never sent to an agent. If logging fails, cleanup stops
-scheduling new targets and displays the logging error. Already-started workers
-finish safely, and their results are reconciled before the run returns.
-
-## Review and settings
-
-The review window supports search by name or path, risk filters, selecting visible
-low-risk items, and clearing all selections. Filtering preserves hidden selections
-and explicitly counts them in the footer; the deletion confirmation includes all
-selected paths. Use the info button beside an item's risk to see its reason and
-deletion scope; both also appear in the final confirmation. Cancel is available
-while scanning or asking an agent, including automatic preflight scans. Automatic
-cleanup rechecks its setting, threshold, and free space after scanning before it
-starts deleting.
-Use Command-1 for Review, Command-comma for Settings, and Command-W to close
-the current window. Standard window commands are also available in the menus.
-
-Settings has separate **Agent**, **Agent Tools**, and **General & Safety** tabs. Advanced executable
-paths and custom model IDs are collapsed by default. Claude also offers model
-presets. Review actions check CLI, Apple model, or selected Ollama model readiness
-and offer **Set Up Agent…** when unavailable. CLI detection does not verify sign-in.
-Cancelling a scan stops its background traversal, and targets that fail
-the deletion policy are excluded from scan results. Deletion still validates each
-target again immediately before removal.
-
-## Clean now and connected agent tools
-
-**Clean Low-Risk Items…** in the dashboard and app menus runs the same low-risk
-selection as scheduled cleanup, regardless of the free-space threshold. It scans
-if needed, opens Review, and asks for confirmation before permanent deletion.
-
-DiskSage also provides a local [MCP stdio server](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
-for Claude Code, Codex, and compatible clients. Keep the GUI app running; each
-client's `--mcp` process forwards commands over a private, same-user Unix socket
-to the shared app model. Tools cannot supply paths or risk overrides.
-
-After installing the app at `/Applications/DiskSage.app`, connect either client:
+The default suite uses controlled dependencies and disposable filesystem fixtures.
+Live provider checks, a full-machine scan, and the parallel benchmark are opt-in;
+a green default suite does not establish live account or model availability.
 
 ```sh
-claude mcp add --transport stdio --scope user disksage -- /Applications/DiskSage.app/Contents/MacOS/DiskSage --mcp
-codex mcp add disksage -- /Applications/DiskSage.app/Contents/MacOS/DiskSage --mcp
+DISKSAGE_LIVE_APPLE_TEST=1 swift test --filter appleModelCompletesARealBatchedReview
+DISKSAGE_LIVE_CLAUDE_TEST=1 swift test --filter claudeCompletesRealSyntheticReview
+DISKSAGE_LIVE_CODEX_TEST=1 swift test --filter codexCompletesRealSyntheticReview
+DISKSAGE_LIVE_OLLAMA_MODEL='<installed-model>' swift test --filter ollamaCompletesRealSyntheticReview
 ```
 
-Restart an existing client session to discover newly registered tools.
-**Settings → Agent Tools** also provides copyable commands using the running
-app's executable path. Codex setup follows the [official MCP command format](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
-Server readiness is shown separately from client connection status, which is
-managed in the agent.
-**Settings → Agent Tools** controls cleanup authorization: **Confirm in DiskSage**
-by default, **Disabled**, or **Allow low-risk cleanup** for unattended requests.
-This choice is separate from hourly low-disk automation. Enable **Allow built-in
-advisors to request cleanup** to extend it to the selected Claude, Codex, Apple,
-or Ollama advisor. The button then reads **Review & Clean**. Providers can return
-a structured `cleanupRequested` host-tool request after metadata review. The app
-validates the response, requires at least one low-risk delete recommendation,
-then dispatches the same fresh-scan `clean_low_risk` action. Providers have no
-filesystem access and do not inherit other MCP integrations.
+Live advisor tests send synthetic metadata directly to the provider. Provider
+quotas, authentication, downloads, and upstream availability can affect them.
 
-| Tool | Arguments | Result |
-| --- | --- | --- |
-| `get_status` | `{}` | Free space, aggregate counts, busy state and cleanup policy |
-| `scan` | `{"request_id":"<UUID>"}` | Starts a fresh scan and returns a job |
-| `clean_low_risk` | `{"request_id":"<UUID>"}` | Fresh scan, then low-risk cleanup under the configured policy |
-| `get_job` | `{"request_id":"<UUID>"}` | Progress or a final result for that job |
+A single application-owned TCA `AppFeature` store owns scans, advice, confirmation,
+cleanup, monitoring, and MCP jobs. `DiskSageClient`, operation IDs, `TestStore`,
+controlled streams, and `TestClock` cover dependency behavior and stale-response
+races. `AppModel` is a temporary view adapter; AppKit owns native window placement,
+while review filters and settings retain their current local state/preferences.
+Irreversible cleanup effects remain owned by the persistent root store.
 
-Use a new UUID for each new scan or cleanup. Retry the same action with its
-original UUID to retrieve its existing job without starting another run.
-Poll `get_job` until `succeeded`, `warnings`, or `cancelled`; a request being
-accepted does not mean deletion completed. `awaitingConfirmation` requires the
-user to approve or cancel in DiskSage. Busy requests are rejected, not queued.
-Only the last 100 jobs in the current app session are retained. An unknown ID
-after restart or eviction is not proof of cleanup; inspect local history before
-starting another request. Disconnecting an agent does not cancel deletion.
+The icon master is [Resources/AppIcon.png](Resources/AppIcon.png).
+`Scripts/build-icon.sh` produces the macOS ICNS representations; the app build
+includes the icon and SwiftPM resource bundles before signing.
 
-Tool replies include totals, timestamps, and sanitized failures, without paths
-or project names. Full per-item details stay in local cleanup history and logs.
-Agent deletions are logged with the **Agent** trigger and use the existing
-allowlist, identity, symlink, mounted-filesystem, and mandatory logging checks.
+## Contributing and license
 
-## Agent choices
-
-Choose **Settings → Cleanup Agent** to select Claude, Codex, Apple on-device,
-or Ollama. Each remote-capable provider has its own metadata consent setting;
-approving Codex does not approve Claude or Ollama. Changing agents never deletes
-anything. Only low-risk delete recommendations can be selected automatically.
-
-Claude requires `claude auth login`. It runs a bounded `claude --print` request
-with JSON output, no built-in or MCP tools, safe mode, no user/project settings,
-and no session persistence. Codex retains its ephemeral read-only `codex exec`
-integration. Both providers support an executable and model override.
-
-Apple uses Foundation Models guided generation on-device, in small independent
-batches. Settings explains unsupported hardware, disabled Apple Intelligence,
-and model downloads that are not ready. It never falls back to a remote agent.
-
-Ollama discovers text models from `http://127.0.0.1:11434/api/tags`. Refresh and
-choose a model in Settings. Cloud models are labelled **Cloud**; they may send
-metadata off the Mac despite using a localhost endpoint. Local models are
-labelled **Local**. DiskSage does not pull or download models. Local generation
-uses a JSON schema; cloud output is prompted as JSON and validated locally.
-
-Every provider must return exactly one recommendation per scanned ID, with no
-unknown or duplicate IDs. Invalid or cancelled responses leave the selection
-unchanged. Requests time out after 90 seconds and can be cancelled. Cleanup
-logs remain local and are not included in agent requests.
-
-## Release artifacts
-
-Tagged builds are produced by GitHub Actions as an ad-hoc-signed zip with a
-SHA-256 checksum. For public distribution without Gatekeeper warnings, configure
-Developer ID signing and Apple notarization before publishing a stable release.
-
-For a richer chat experience, future versions can adopt Codex app-server while
-keeping the same scanner and deletion-policy boundary.
-
-## Contributing
-
-Issues and pull requests are welcome. Please include tests for any change to
-the scanner or safety policy. New cleanup locations must be narrowly scoped,
-regenerable, and explicitly added to `SafetyPolicy`.
-
-## License
-
-MIT
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and cleanup-location
+proposals. New locations must be narrowly scoped, explicitly allowlisted, and
+reviewed for user state that could be lost. Licensed under [MIT](LICENSE).

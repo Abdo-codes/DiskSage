@@ -14,7 +14,9 @@ Before opening a pull request:
 1. Add tests for scanner or deletion-policy changes.
 2. Run `swift test`.
 3. Confirm new candidates are regenerable and narrowly scoped.
-4. Never allow agent output to introduce a filesystem path or trigger deletion.
+4. Never allow agent output to introduce filesystem paths or bypass host cleanup
+   authorization. Optional cleanup requests must use the shared low-risk policy,
+   fresh scan, safety checks, and logging pipeline.
 5. Keep credentials, personal paths, and scan results out of fixtures and logs.
 
 ## Cleanup-location proposals
