@@ -19,40 +19,25 @@ enum CodexAdvisorError: LocalizedError {
         case let .untrustedExecutable(reason):
             "Codex executable was refused: \(reason)"
         case .timedOut:
-            "Codex did not respond within 90 seconds."
+            "Codex did not respond within \(CodexAdvisor.timeoutSeconds) seconds."
         }
     }
 }
 
 struct CodexAdvisor: Sendable {
-    private struct AdvisorCandidate: Codable {
-        let id: UUID
-        let category: String
-        let sizeBytes: Int64
-        let risk: String
-        let reason: String
-    }
+    static let timeoutSeconds: Int = 90
 
-    func recommend(candidates: [CleanupCandidate], executablePath: String, model: String) async throws -> AgentResponse {
-        let payload = candidates.map {
-            AdvisorCandidate(
-                id: $0.id,
-                category: $0.category.rawValue,
-                sizeBytes: $0.size,
-                risk: $0.risk.title,
-                reason: $0.reason
-            )
-        }
-        let data = try JSONEncoder().encode(payload)
-        let json = String(decoding: data, as: UTF8.self)
+    func recommend(candidates: [CleanupCandidate], executablePath: String, model: String, allowsCleanupRequests: Bool = false) async throws -> AgentResponse {
+        let json = try AdvisorContract.metadataJSON(candidates)
 
-        let controller = ProcessController()
+        let controller = AdvisorProcessController()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
                 let response = try runCodex(
                     json: json,
                     executablePath: executablePath,
                     model: model,
+                    allowsCleanupRequests: allowsCleanupRequests,
                     controller: controller
                 )
                 try validate(response, expectedIDs: Set(candidates.map(\.id)))
@@ -82,7 +67,8 @@ struct CodexAdvisor: Sendable {
         json: String,
         executablePath: String,
         model: String,
-        controller: ProcessController
+        allowsCleanupRequests: Bool,
+        controller: AdvisorProcessController
     ) throws -> AgentResponse {
         guard let executable = Self.discoverExecutable(preferredPath: executablePath) else {
             throw CodexAdvisorError.executableNotFound
@@ -96,22 +82,9 @@ struct CodexAdvisor: Sendable {
         let outputURL = temporaryDirectory.appending(path: "recommendation.json")
         let schemaURL = temporaryDirectory.appending(path: "schema.json")
         let stderrURL = temporaryDirectory.appending(path: "stderr.log")
-        try Self.responseSchema.write(to: schemaURL, atomically: true, encoding: .utf8)
+        try AdvisorContract.responseSchema.write(to: schemaURL, atomically: true, encoding: .utf8)
 
-        let prompt = """
-        You are DiskSage's read-only cleanup advisor. Review only the candidate metadata below.
-        Do not inspect the filesystem, run tools, or suggest paths that are not listed. The host app,
-        not you, controls deletion. Prefer deleting regenerable caches and builds. Treat archives and
-        simulator data as review-only unless there is an unusually strong reason.
-
-        Return only JSON with this exact shape:
-        {"summary":"short summary","recommendations":[{"id":"UUID","decision":"delete|keep|review","rationale":"short reason"}]}
-
-        Include every candidate exactly once and preserve its ID.
-
-        Candidates:
-        \(json)
-        """
+        let prompt = AdvisorContract.prompt(metadata: json, allowsCleanupRequests: allowsCleanupRequests)
 
         var arguments = [
             "exec",
@@ -136,22 +109,20 @@ struct CodexAdvisor: Sendable {
         process.standardOutput = FileHandle.nullDevice
         _ = FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
         let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        defer { stderrHandle.closeFile() }
         process.standardError = stderrHandle
         let completion = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in completion.signal() }
-        controller.set(process)
-        try process.run()
-        if completion.wait(timeout: .now() + 90) == .timedOut {
+        try controller.launch(process)
+        if completion.wait(timeout: .now() + Double(Self.timeoutSeconds)) == .timedOut {
             controller.terminate()
             if completion.wait(timeout: .now() + 3) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
                 _ = completion.wait(timeout: .now() + 2)
             }
-            stderrHandle.closeFile()
             controller.clear()
             throw CodexAdvisorError.timedOut
         }
-        stderrHandle.closeFile()
         controller.clear()
 
         guard process.terminationStatus == 0 else {
@@ -169,14 +140,8 @@ struct CodexAdvisor: Sendable {
     }
 
     func validate(_ response: AgentResponse, expectedIDs: Set<UUID>) throws {
-        let ids = response.recommendations.map(\.id)
-        guard response.summary.utf8.count <= 1_000,
-              response.recommendations.count == expectedIDs.count,
-              Set(ids).count == ids.count,
-              Set(ids) == expectedIDs,
-              response.recommendations.allSatisfy({ $0.rationale.utf8.count <= 500 }) else {
-            throw CodexAdvisorError.invalidResponse
-        }
+        do { try AdvisorContract.validate(response, expectedIDs: expectedIDs) }
+        catch { throw CodexAdvisorError.invalidResponse }
     }
 
     private func validateExecutable(_ executable: URL) throws {
@@ -206,30 +171,6 @@ struct CodexAdvisor: Sendable {
         return result
     }
 
-    private static let responseSchema = """
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["summary", "recommendations"],
-      "properties": {
-        "summary": {"type": "string", "maxLength": 1000},
-        "recommendations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "decision", "rationale"],
-            "properties": {
-              "id": {"type": "string", "format": "uuid"},
-              "decision": {"type": "string", "enum": ["delete", "keep", "review"]},
-              "rationale": {"type": "string", "maxLength": 500}
-            }
-          }
-        }
-      }
-    }
-    """
-
     private func stripMarkdownFences(_ value: String) -> String {
         var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.hasPrefix("```") {
@@ -237,31 +178,5 @@ struct CodexAdvisor: Sendable {
             result = result.replacingOccurrences(of: "```", with: "")
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-private final class ProcessController: @unchecked Sendable {
-    private let lock = NSLock()
-    private var process: Process?
-
-    func set(_ process: Process) {
-        lock.lock()
-        self.process = process
-        lock.unlock()
-    }
-
-    func clear() {
-        lock.lock()
-        process = nil
-        lock.unlock()
-    }
-
-    func terminate() {
-        lock.lock()
-        let runningProcess = process
-        lock.unlock()
-        if runningProcess?.isRunning == true {
-            runningProcess?.terminate()
-        }
     }
 }
