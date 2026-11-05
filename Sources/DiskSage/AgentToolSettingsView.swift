@@ -13,12 +13,14 @@ struct AgentToolSettingsView: View {
             }
             Toggle("Allow built-in advisors to request cleanup", isOn: $builtInCleanup)
                 .disabled(policy == AgentCleanupPolicy.disabled.rawValue)
-            Text("Allow Claude Code, Codex, and other MCP clients to request cleanup. Only DiskSage’s low-risk generated files are eligible. Every deletion uses the same safety checks and cleanup logs.")
+            Text("MCP clients can review paths, manage schedules and settings, request advice, and read cleanup logs. Selected-item deletion, custom folder authorization, and settings changes require in-app approval. Built-in advisors still receive metadata only.")
                 .font(.callout).foregroundStyle(.secondary)
             if policy == AgentCleanupPolicy.automaticLowRisk.rawValue {
                 Label("Authorized agents can permanently delete low-risk items without another confirmation.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
+            Text("Low-risk schedules can be activated by agents under Allow low-risk cleanup. Confirm mode saves their changes paused; enable them in Schedules. Custom folder changes always need your approval.")
+                .font(.caption).foregroundStyle(.secondary)
             if let error = model.agentToolConnectionError {
                 Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
             } else {

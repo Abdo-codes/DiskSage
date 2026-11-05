@@ -16,7 +16,7 @@ struct MCPServerTests {
         #expect(info["protocolVersion"] as? String == "2025-06-18")
         let listed = try response(server, method: "tools/list")
         let tools = try #require((listed["result"] as? [String: Any])?["tools"] as? [[String: Any]])
-        #expect(Set(tools.compactMap { $0["name"] as? String }) == ["get_status", "scan", "clean_low_risk", "get_job"])
+        #expect(Set(["get_status", "scan", "clean_low_risk", "get_job"]).isSubset(of: Set(tools.compactMap { $0["name"] as? String })))
         let clean = try #require(tools.first { $0["name"] as? String == "clean_low_risk" })
         #expect((clean["annotations"] as? [String: Any])?["destructiveHint"] as? Bool == true)
         let reply = try response(server, method: "tools/call", params: ["name": "get_status", "arguments": [:]])

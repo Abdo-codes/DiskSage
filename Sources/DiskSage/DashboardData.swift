@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiskUsageSnapshot: Equatable, Sendable {
+struct DiskUsageSnapshot: Equatable, Codable, Sendable {
     let name: String
     let totalBytes: Int64
     let availableBytes: Int64

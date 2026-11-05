@@ -16,6 +16,7 @@ enum FeatureTestSupport {
         TestStore(initialState: initial) { AppFeature() } withDependencies: {
             $0.uuid = .incrementing
             $0.date = .constant(epoch)
+            $0.calendar = .current
             $0.diskSage = .testValue
             dependencies(&$0)
         }

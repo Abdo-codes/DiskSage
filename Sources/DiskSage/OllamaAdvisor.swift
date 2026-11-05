@@ -1,6 +1,6 @@
 import Foundation
 
-struct OllamaModel: Decodable, Identifiable, Sendable {
+struct OllamaModel: Codable, Identifiable, Sendable {
     let name: String
     var remote_host: String?
     var capabilities: [String]?

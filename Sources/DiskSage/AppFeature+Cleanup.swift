@@ -51,6 +51,7 @@ extension AppFeature {
                 state.automaticCleanupSummary = state.statusMessage
             }
             if let jobID = state.activeAgentToolJobID { finishAgentCleanup(state: &state, jobID: jobID, report: report) }
+            if state.activeSchedule != nil { return finishScheduledCleanup(state: &state, report: report) }
         default: break
         }
         return .none
@@ -64,7 +65,8 @@ extension AppFeature {
         return reduceCleanup(state: &state, action: .requestDeletion(state.lowRiskCandidates))
     }
 
-    func beginCleanup(state: inout State, targets: [CleanupCandidate], trigger: CleanupTrigger) -> EffectOf<Self> {
+    func beginCleanup(state: inout State, targets: [CleanupCandidate], trigger: CleanupTrigger,
+                      cleanupAction: CleanupAction? = nil) -> EffectOf<Self> {
         let id = uuid()
         state.activityRevision += 1
         state.operationID = id
@@ -80,8 +82,9 @@ extension AppFeature {
         state.statusMessage = "Deleting approved candidates…"
         if let job = state.activeAgentToolJobID { state.agentToolJobs[job]?.phase = .cleaning }
         // Intentionally no cancellation ID: deletion belongs to the persistent application store.
+        let cleanup = cleanupAction ?? client.cleanup
         return .run { [client] send in
-            let report = await client.cleanup(targets, trigger) { progress in await send(.cleanupProgress(id, progress)) }
+            let report = await cleanup(targets, trigger) { progress in await send(.cleanupProgress(id, progress)) }
             let dashboard = await client.dashboard()
             await send(.cleanupFinished(id, report, dashboard))
         }

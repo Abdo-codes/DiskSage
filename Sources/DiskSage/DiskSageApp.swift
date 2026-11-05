@@ -19,7 +19,7 @@ struct DiskSageApp {
 }
 
 @MainActor
-final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowDelegate {
     private let model: AppModel
     private let store: StoreOf<AppFeature>
     private var presentedAgentConfirmationID: UUID?
@@ -29,6 +29,8 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var settingsWindow: NSWindow?
     private var historyWindow: NSWindow?
     private var agentToolTask: Task<Void, Never>?
+    private var managementWindow: NSWindow?
+    private var presentedManagementID: UUID?
 
     init(model: AppModel) {
         self.model = model
@@ -38,6 +40,8 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        NotificationCenter.default.addObserver(self, selector: #selector(openToolWindow(_:)), name: .diskSageOpenWindow, object: nil)
+        observe { [weak self] in self?.presentManagementApproval() }
         observe { [weak self] in
             guard let self else { return }
             guard let request = self.store.pendingDeletionRequest, request.trigger == .agent else {
@@ -219,6 +223,46 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     @objc func quitApplication() { NSApp.terminate(nil) }
 
+    private func presentManagementApproval() {
+        guard let request = model.pendingManagementApproval else {
+            presentedManagementID = nil
+            managementWindow?.orderOut(nil)
+            return
+        }
+        guard presentedManagementID != request.id else { return }
+        presentedManagementID = request.id
+        dashboard?.hide()
+        let window = managementWindow ?? makeWindow(title: "DiskSage Agent Request", width: 600, height: 440, resizable: true)
+        window.delegate = self
+        HostedWindowSizing.configure(window, content: ManagementApprovalView(request: request,
+            approve: { [weak self] in self?.store.send(.approveManagement(request.id)) },
+            reject: { [weak self] in self?.store.send(.rejectManagement(request.id)) }),
+            minimum: NSSize(width: 520, height: 360), preferred: NSSize(width: 600, height: 440), frameName: "AgentApproval")
+        managementWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if notification.object as? NSWindow === managementWindow, let id = model.pendingManagementApproval?.id {
+            store.send(.rejectManagement(id))
+        }
+    }
+
+    @objc private func openToolWindow(_ notification: Notification) {
+        switch notification.object as? String {
+        case "review": showReview()
+        case "history": showHistory()
+        case "settings": showSettings()
+        case "schedules", "agent", "tools", "general":
+            UserDefaults.standard.set(notification.object as? String, forKey: "settingsSelectedTab")
+            showSettings()
+        case "dashboard":
+            if let button = statusItem?.button { dashboard?.show(button: button, invocation: .reopen) }
+        default: break
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !model.isCleaning else {
             model.errorMessage = "Cleanup is still running. Wait for it to finish before quitting DiskSage."
@@ -232,7 +276,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if let window = [reviewWindow, settingsWindow, historyWindow].compactMap({ $0 }).first(where: { $0.isVisible }) {
+        if let window = [managementWindow, reviewWindow, settingsWindow, historyWindow].compactMap({ $0 }).first(where: { $0.isVisible }) {
             dashboard?.hide()
             (window.attachedSheet ?? window).makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)

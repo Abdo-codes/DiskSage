@@ -42,11 +42,19 @@ struct AppFeature {
         var automaticCheckID: UUID?
         var activityRevision = 0
         var dashboardRevision = 0
+        var schedules: [CleanupSchedule] = []
+        var schedulesLoaded = false
+        var isScheduling = false
+        var scheduleError: String?
+        var schedulingBlocked = false
+        var activeSchedule: ScheduledCleanupRun?
+        var pendingManagementApproval: ManagementApproval?
+        var managedRequests: [UUID: AgentToolRequest] = [:]
 
         var isScanning: Bool { operation == .scanning || operation == .automaticScan }
         var isAdvising: Bool { operation == .advising }
         var isCleaning: Bool { operation == .cleaning || operation == .automaticCleanup }
-        var isBusy: Bool { operation != .idle || pendingDeletionRequest != nil }
+        var isBusy: Bool { operation != .idle || pendingDeletionRequest != nil || pendingManagementApproval != nil }
         var lowRiskCandidates: [CleanupCandidate] { candidates.filter { $0.risk == .low } }
         var selectedCandidates: [CleanupCandidate] { candidates.filter { selection.contains($0.id) } }
         var selectedBytes: Int64 { selectedCandidates.reduce(0) { $0 + $1.size } }
@@ -79,13 +87,26 @@ struct AppFeature {
         case capacityRead(UUID, Int, Bool, Int64)
         case automaticCheckLogged(UUID, Bool, FeatureFailure?)
         case openLogs
+        case startScheduling
+        case stopScheduling
+        case scheduleTick
+        case saveSchedule(CleanupSchedule)
+        case setScheduleEnabled(UUID, Bool)
+        case removeSchedule(UUID)
+        case scheduledScanFinished(UUID, Result<[CleanupCandidate], FeatureFailure>)
+        case approveManagement(UUID)
+        case rejectManagement(UUID)
+        case managementFinished(UUID, Result<ToolValue, FeatureFailure>)
     }
 
-    enum CancelID { case scan, advisor, dashboard, monitor, monitorCheck }
+    enum CancelID { case scan, advisor, dashboard, monitor, monitorCheck, schedules }
     @Dependency(\.diskSage) var client
     @Dependency(\.date.now) var now
     @Dependency(\.uuid) var uuid
     @Dependency(\.continuousClock) var clock
+    @Dependency(\.schedules) var schedules
+    @Dependency(\.calendar) var calendar
+    @Dependency(\.management) var management
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
@@ -96,8 +117,13 @@ struct AppFeature {
                  .requestLowRiskCleanup, .confirmDeletion, .dismissConfirmation:
                 return reduceCleanup(state: &state, action: action)
             case let .agentToolRequest(request): return handleAgentRequest(state: &state, request: request)
+            case .approveManagement, .rejectManagement, .managementFinished:
+                return reduceManagement(state: &state, action: action)
             case .startMonitoring, .stopMonitoring, .monitorTick, .capacityRead, .automaticCheckLogged:
                 return reduceMonitoring(state: &state, action: action)
+            case .startScheduling, .stopScheduling, .scheduleTick, .saveSchedule,
+                 .setScheduleEnabled, .removeSchedule, .scheduledScanFinished:
+                return reduceSchedules(state: &state, action: action)
             case let .selectionChanged(selection): state.selection = selection; return .none
             case let .presentationError(error): state.errorMessage = error; return .none
             case let .toolConnectionChanged(error): state.agentToolConnectionError = error; return .none

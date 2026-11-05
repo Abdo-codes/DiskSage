@@ -1,6 +1,6 @@
 import Foundation
 
-struct CleanupRunSummary: Equatable, Identifiable, Sendable {
+struct CleanupRunSummary: Equatable, Identifiable, Codable, Sendable {
     let id: UUID
     let timestamp: Date
     let trigger: CleanupTrigger

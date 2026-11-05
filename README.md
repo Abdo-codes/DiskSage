@@ -85,7 +85,7 @@ empty, symlinked, disallowed, or running-executable targets are excluded.
 **Low risk is a classification, not a guarantee that every tool uses its cache
 correctly.** Some tools keep non-regenerable state in cache directories. Review
 those candidates before allowing unattended cleanup. Archives, simulator devices,
-and generic `build` folders are excluded from automatic cleanup.
+and generic `build` folders are excluded from low-disk and agent cleanup.
 
 ## Cleanup controls
 
@@ -95,6 +95,7 @@ and generic `build` folders are excluded from automatic cleanup.
 | Clean now | **Clean Low-Risk Items…** in the dashboard or menus | Always; scans first if needed |
 | Low-disk automation | Startup and hourly capacity checks | No additional prompt for low-risk targets |
 | Agent-requested cleanup | MCP tool or an explicitly enabled built-in advisor | Depends on **Agent Tools → Cleanup requests** |
+| Scheduled folders | Daily, weekly, or once at a chosen time | Custom folder contents require explicit authorization when configured |
 
 Configure startup, low-disk automation, and the threshold in
 **Settings → General & Safety**. The default threshold is **15 GiB**. Automatic
@@ -110,6 +111,23 @@ Closing a window or disconnecting an agent does not stop it; quitting is blocked
 until the run finishes. Independent targets run concurrently, overlapping targets
 retain their order, and simulator cleanup runs alone. Large trees can take time
 because macOS must unlink their entries individually.
+
+### Scheduled folders
+
+Open **Settings → Schedules → Add schedule**. Choose a generated build/cache
+folder and a daily, weekly, or one-time cleanup time. Low-risk mode is the default.
+To clean another folder, choose **All folder contents** and explicitly authorize
+permanent deletion. Each run removes the folder's contents while keeping the
+folder itself. Symlinks are not followed, and replaced folders need new authorization.
+
+Schedules have independent enable switches, next-run times, and last results;
+completed deletions appear as **Scheduled** in History and the local logs. They
+do not depend on the low-disk threshold. DiskSage must remain running; enable
+launch at login for unattended use. Due times are checked every 30 seconds.
+After sleep or downtime, each missed schedule runs once when the app is free,
+then advances to its next occurrence. A running manual or agent operation delays
+scheduled work. An occurrence is recorded before cleanup starts, so restarting
+cannot repeat it. No schedules are created or enabled by default.
 
 | Shortcut | Action |
 | --- | --- |
@@ -172,6 +190,7 @@ same-user Unix socket. Server readiness does not mean a client is connected.
   low-risk targets without another prompt.
 
 This policy is separate from low-disk automation and metadata consent.
+See the [complete MCP tool contract](docs/MCP.md) for all 26 tools and examples.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
@@ -182,15 +201,19 @@ This policy is separate from low-disk automation and metadata consent.
 
 Use a fresh UUID for each new operation. Retry the same action with its original
 UUID to retrieve its existing job without duplicating work. Busy requests are
-rejected, not queued; retry them later with the same UUID. Paths and risk overrides
-are never accepted as tool arguments.
+rejected, not queued; retry them later with the same UUID. Scan and low-risk cleanup
+tools do not accept paths or risk overrides. Schedule tools accept explicit folder
+configuration under the same authorization rules as Settings.
 
 Poll `get_job` until a terminal phase: `succeeded`, `warnings`, `failed`, or
 `cancelled`. `awaitingConfirmation` requires user action in DiskSage. Acceptance
 is not proof of deletion. Tool replies carry totals, timestamps, and sanitized
-failures; detailed paths remain in local history and logs.
+failures. Connected MCP clients can inspect paths, schedules, settings, history,
+and logs through the review tools; built-in advisors still receive metadata only.
 
-Only the last 100 jobs are retained, for the current app session. An unknown ID
+The last 100 jobs are retained for the current app session. The last 200 completed
+schedule mutations are durably retained across restart and cannot be replayed to
+restore an older configuration. An unknown ID
 after restart or eviction is not proof that cleanup ran. Check history before
 starting another request. Client disconnection does not cancel active deletion.
 
@@ -211,10 +234,12 @@ space. Shared files, delayed reclamation, and other apps affect the observed
 change. Review labels its retained value **Available space immediately after
 cleanup**; the dashboard shows current capacity.
 
-Every target is checked against a local allowlist immediately before deletion.
+Scanner and agent targets are checked against a local allowlist before deletion.
+Custom scheduled folders use separate, explicit folder authorization, checked
+again immediately before deletion; they do not expand the scanner or agent allowlist.
 Descriptor-relative deletion rejects symlink swaps, changed identities, and
-mounted-filesystem boundaries. Targets under `.git`, broad roots, paths outside
-the allowlist, and the running executable tree are refused. AI output cannot
+mounted-filesystem boundaries. Targets under `.git`, broad roots, unauthorized
+paths, and the running executable tree are refused. Built-in advisor output cannot
 introduce a filesystem path or bypass the host cleanup policy.
 See [SECURITY.md](SECURITY.md).
 
