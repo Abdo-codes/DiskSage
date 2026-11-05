@@ -42,7 +42,7 @@ struct CleanupScheduler {
                     updates.yield(.started(candidate, completed: results.count, total: candidates.count))
                     group.addTask {
                         await withCheckedContinuation { continuation in
-                            DispatchQueue.global(qos: trigger == .automatic ? .utility : .userInitiated).async {
+                            DispatchQueue.global(qos: trigger == .automatic || trigger == .scheduled ? .utility : .userInitiated).async {
                                 let counter = CleanupEntryCounter { entries.record(index: index, count: $0) }
                                 let result: CleanupItemResult
                                 do {

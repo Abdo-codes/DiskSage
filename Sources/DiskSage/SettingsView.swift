@@ -11,6 +11,9 @@ struct SettingsView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            ScheduleSettingsView(model: model)
+                .tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }
+                .tag("schedules")
             Form { AgentSettingsView() }
                 .formStyle(.grouped)
                 .padding(16)
@@ -24,7 +27,7 @@ struct SettingsView: View {
             Form {
                 Section("Safety") {
                     Label("Advisors receive metadata only. Authorized tools can request low-risk cleanup.", systemImage: "lock.shield")
-                    Label("High-risk items require manual selection and confirmation.", systemImage: "hand.raised")
+                    Label("Scanned high-risk items require manual confirmation. Custom folder schedules require explicit authorization.", systemImage: "hand.raised")
                 }
 
                 Section("General") {
@@ -50,9 +53,13 @@ struct SettingsView: View {
         }
         .padding(.top, 12)
         .frame(width: 600, height: 540)
+        .onReceive(NotificationCenter.default.publisher(for: .diskSageSettingsChanged)) { _ in
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {
+        guard enabled != (SMAppService.mainApp.status == .enabled) else { return }
         do {
             if enabled {
                 try SMAppService.mainApp.register()

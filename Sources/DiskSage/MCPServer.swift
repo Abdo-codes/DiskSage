@@ -34,8 +34,8 @@ final class MCPServer {
             return encode(result([
                 "protocolVersion": versions.contains(requested) ? requested : versions[0],
                 "capabilities": ["tools": [String: Any]()],
-                "serverInfo": ["name": "DiskSage", "version": "0.2.0"],
-                "instructions": "Open DiskSage first. Start scan or cleanup with a new UUID request_id, then poll get_job. Reuse the same UUID only to retry the same request. Only low-risk generated files can be cleaned. Confirmation depends on DiskSage Settings."
+                "serverInfo": ["name": "DiskSage", "version": "0.3.0"],
+                "instructions": "Open DiskSage first. Use a new UUID request_id for every mutation or job; reuse only for an identical retry. Poll get_job for work or human approval. Review candidate IDs before requesting deletion; sensitive deletion, custom folder authorization and settings changes require in-app approval. Read schedules before editing their revisions. Schedules run while DiskSage is open."
             ], id: id))
         }
         if method == "ping" { return encode(result([:], id: id)) }
@@ -56,7 +56,9 @@ final class MCPServer {
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
                 let value = String(decoding: try encoder.encode(reply), as: UTF8.self)
-                return encode(result(["content": [["type": "text", "text": value]], "isError": reply.error != nil], id: id))
+                let structured = try JSONSerialization.jsonObject(with: encoder.encode(reply))
+                return encode(result(["content": [["type": "text", "text": value]], "structuredContent": structured,
+                    "isError": reply.error != nil], id: id))
             } catch let failure as MCPError {
                 return encode(error(-32602, failure.message, id: id))
             } catch {
@@ -70,6 +72,7 @@ final class MCPServer {
     struct MCPError: Error { let message: String }
 
     static func command(name: String, arguments: [String: Any]) throws -> AgentToolRequest {
+        if let request = try MCPManagementSchema.command(name: name, arguments: arguments) { return request }
         let action: AgentToolRequest.Action
         switch name {
         case "get_status": action = .status
@@ -91,7 +94,7 @@ final class MCPServer {
         [tool("get_status", description: "Read free disk space, aggregate candidates, busy state and agent cleanup policy.", action: .status),
          tool("scan", description: "Start a fresh scan. Returns a job; poll get_job. UUID request_id deduplicates retries during this app session.", action: .scan),
          tool("clean_low_risk", description: "Scan, then request cleanup of low-risk generated files only. May await confirmation in DiskSage. Returns a job; poll get_job for the actual result. Permanent deletion. No paths or risk overrides accepted.", action: .cleanLowRisk),
-         tool("get_job", description: "Read progress or completion by request_id. Unknown means no retained record, never proof of cleanup. The last 100 jobs are retained only until DiskSage quits.", action: .job)]
+         tool("get_job", description: "Read progress, result or pending approval by request_id. Unknown never proves cleanup. Last 100 jobs survive this app session; the last 200 completed schedule mutations also survive restart.", action: .job)] + MCPManagementSchema.definitions.map(\.schema)
     }
 
     private static func tool(_ name: String, description: String, action: AgentToolRequest.Action) -> [String: Any] {
@@ -107,5 +110,10 @@ final class MCPServer {
     private func error(_ code: Int, _ message: String, id: Any) -> [String: Any] {
         ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]]
     }
-    private func encode(_ object: [String: Any]) -> Data? { try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }
+    private func encode(_ object: [String: Any]) -> Data? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
+        if data.count < LocalToolConnection.maximumFrameSize { return data }
+        return try? JSONSerialization.data(withJSONObject: error(-32603,
+            "Tool response exceeded the frame limit. Use pagination and a smaller limit.", id: object["id"] ?? NSNull()))
+    }
 }

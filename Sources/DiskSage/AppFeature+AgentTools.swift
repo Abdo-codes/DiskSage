@@ -4,6 +4,7 @@ import Foundation
 extension AppFeature {
     func handleAgentRequest(state: inout State, request: AgentToolRequest) -> EffectOf<Self> {
         switch request.action {
+        case .manage: return handleManagement(state: &state, request: request)
         case .status:
             state.agentToolReply = AgentToolReply(status: AgentToolStatus(busy: state.isBusy,
                 awaitingConfirmation: state.pendingDeletionRequest != nil, freeSpaceBytes: client.freeSpace(),
@@ -11,6 +12,12 @@ extension AppFeature {
                 lowRiskBytes: state.lowRiskCandidates.reduce(0) { $0 + $1.size }, lastScanDate: state.lastScanDate,
                 cleanupPolicy: client.preferences().agentPolicy.rawValue))
         case .job:
+            if let id = request.requestID, state.agentToolJobs[id] == nil,
+               let receipt = try? management.receipt(id) {
+                state.agentToolReply = AgentToolReply(job: AgentToolJob(id: id, action: .manage,
+                    startedAt: receipt.timestamp, phase: .succeeded, completedAt: receipt.timestamp, result: receipt.result))
+                return .none
+            }
             guard let id = request.requestID, var job = state.agentToolJobs[id] else {
                 state.agentToolReply = AgentToolReply(error: "Unknown job. Jobs are retained for this app session only; do not assume cleanup ran.")
                 return .none
@@ -40,11 +47,7 @@ extension AppFeature {
             state.agentToolJobs[id] = job
             state.agentToolJobOrder.append(id)
             state.activeAgentToolJobID = id
-            if state.agentToolJobOrder.count > 100,
-               let stale = state.agentToolJobOrder.first(where: { $0 != state.activeAgentToolJobID }) {
-                state.agentToolJobs[stale] = nil
-                state.agentToolJobOrder.removeAll { $0 == stale }
-            }
+            trimAgentJobs(state: &state)
             state.agentToolReply = AgentToolReply(job: job)
             return beginScan(state: &state, purpose: .agent(id))
         }

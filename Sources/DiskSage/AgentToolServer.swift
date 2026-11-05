@@ -75,7 +75,9 @@ final class AgentToolServer: @unchecked Sendable {
             await withCheckedContinuation { continuation in
                 ioQueue.async {
                     if let data = try? JSONEncoder().encode(reply) {
-                        try? LocalToolConnection.writeFrame(data, to: incoming.descriptor)
+                        let bounded = data.count < LocalToolConnection.maximumFrameSize ? data :
+                            (try? JSONEncoder().encode(AgentToolReply(error: "Tool response exceeded the frame limit. Use a smaller page limit.")))
+                        if let bounded { try? LocalToolConnection.writeFrame(bounded, to: incoming.descriptor) }
                     }
                     close(incoming.descriptor)
                     continuation.resume()

@@ -22,8 +22,9 @@ struct DashboardSnapshot: Equatable, Sendable {
     var historyError: String?
 }
 
-struct FeatureFailure: Error, Equatable, Sendable {
+struct FeatureFailure: LocalizedError, Equatable, Sendable {
     let message: String
+    var errorDescription: String? { message }
 }
 
 struct DiskSageClient: Sendable {

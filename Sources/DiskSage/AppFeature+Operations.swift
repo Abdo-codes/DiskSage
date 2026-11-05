@@ -54,12 +54,21 @@ extension AppFeature {
             case let .failure(error):
                 state.errorMessage = error.message
                 state.statusMessage = "\(configuration.provider.title) review failed"
+                if let job = state.activeAgentToolJobID, state.agentToolJobs[job]?.phase == .advising {
+                    state.agentToolJobs[job]?.result = .object(["error": .string(error.message)])
+                    completeAgentJob(state: &state, id: job, phase: .failed)
+                }
             case let .success(response):
                 state.recommendations = Dictionary(uniqueKeysWithValues: response.recommendations.map { ($0.id, $0) })
                 state.recommendationSummary = response.summary
                 let choices = state.candidates.filter { $0.risk == .low && state.recommendations[$0.id]?.decision == .delete }
                 state.selection = Set(choices.map(\.id))
                 state.statusMessage = "\(configuration.provider.title) review complete"
+                if let job = state.activeAgentToolJobID, state.agentToolJobs[job]?.phase == .advising {
+                    state.agentToolJobs[job]?.result = .object(["summary": .string(response.summary),
+                        "recommendation_count": .integer(response.recommendations.count), "cleanup_requested": .bool(response.cleanupRequested == true)])
+                    completeAgentJob(state: &state, id: job, phase: .succeeded)
+                }
                 let preferences = client.preferences()
                 if configuration.allowsCleanupRequests, response.cleanupRequested == true, !choices.isEmpty,
                    preferences.builtInCleanupEnabled, preferences.agentPolicy != .disabled {
@@ -74,6 +83,9 @@ extension AppFeature {
             state.operation = .idle
             state.operationID = nil
             state.statusMessage = "Operation cancelled"
+            if state.activeSchedule != nil {
+                finishScheduleAttempt(state: &state, message: "Scheduled cleanup cancelled.")
+            }
             if let job = state.activeAgentToolJobID { completeAgentJob(state: &state, id: job, phase: .cancelled) }
             return .merge(.cancel(id: CancelID.scan), .cancel(id: CancelID.advisor))
         default: return .none

@@ -4,12 +4,14 @@ enum CleanupTrigger: String, Codable, Sendable {
     case manual
     case automatic
     case agent
+    case scheduled
 
     var title: String {
         switch self {
         case .manual: "Manual"
         case .automatic: "Automatic"
         case .agent: "Agent"
+        case .scheduled: "Scheduled"
         }
     }
 }
@@ -104,5 +106,18 @@ final class CleanupLogger: @unchecked Sendable {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.synchronize()
+    }
+
+    func events(runID: UUID? = nil) throws -> [CleanupLogEvent] {
+        lock.lock(); defer { lock.unlock() }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        var events: [CleanupLogEvent] = []
+        for url in [directory.appending(path: "cleanup.previous.jsonl"), fileURL] {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            events += try Data(contentsOf: url).split(separator: 0x0A).compactMap {
+                try? decoder.decode(CleanupLogEvent.self, from: Data($0))
+            }
+        }
+        return events.filter { runID == nil || $0.runID == runID }
     }
 }

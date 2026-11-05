@@ -85,7 +85,7 @@ enum SimulatorCleanup {
 
 enum SecureFileDeleter {
     static func delete(_ candidate: CleanupCandidate, entryRemoved: () -> Void) throws {
-        let components = candidate.url.standardizedFileURL.pathComponents
+        let components = CleanupPath.fileURL(candidate.url).pathComponents
         guard components.count > 1, let targetName = components.last else {
             throw SafetyPolicyError.refused("Refused an unsafe root path.")
         }

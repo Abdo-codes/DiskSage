@@ -19,9 +19,11 @@ enum AgentCleanupPolicy: String, Sendable, CaseIterable, Identifiable {
 }
 
 struct AgentToolRequest: Codable, Equatable, Sendable {
-    enum Action: String, Codable, Sendable { case status, scan, cleanLowRisk, job }
+    enum Action: String, Codable, Sendable { case status, scan, cleanLowRisk, job, manage }
     let action: Action
     var requestID: UUID? = nil
+    var tool: String? = nil
+    var arguments: [String: ToolValue]? = nil
 }
 
 struct AgentToolStatus: Equatable, Codable, Sendable {
@@ -37,7 +39,7 @@ struct AgentToolStatus: Equatable, Codable, Sendable {
 
 struct AgentToolJob: Equatable, Codable, Sendable {
     enum Phase: String, Codable, Sendable {
-        case scanning, awaitingConfirmation, cleaning, succeeded, warnings, failed, cancelled
+        case scanning, awaitingConfirmation, cleaning, advising, loading, succeeded, warnings, failed, cancelled
         var isTerminal: Bool { [.succeeded, .warnings, .failed, .cancelled].contains(self) }
     }
     let id: UUID
@@ -54,10 +56,12 @@ struct AgentToolJob: Equatable, Codable, Sendable {
     var estimatedRemovedBytes: Int64 = 0
     var actualRecoveredBytes: Int64 = 0
     var loggingFailed = false
+    var result: ToolValue?
 }
 
 struct AgentToolReply: Equatable, Codable, Sendable {
     var status: AgentToolStatus? = nil
     var job: AgentToolJob? = nil
     var error: String? = nil
+    var data: ToolValue? = nil
 }

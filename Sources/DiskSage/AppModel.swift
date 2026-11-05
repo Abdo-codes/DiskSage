@@ -16,6 +16,7 @@ final class AppModel {
         if monitoringEnabled {
             store.send(.refreshDashboard)
             store.send(.startMonitoring)
+            store.send(.startScheduling)
         }
     }
 
