@@ -11,7 +11,8 @@ struct DiskSageApp {
             return
         }
         let app = NSApplication.shared
-        let delegate = DiskSageAppDelegate(model: AppModel())
+        let showOnboarding = MCPOnboardingPreferences.shouldAutoShow(hasExistingData: MCPOnboardingPreferences.hasExistingData)
+        let delegate = DiskSageAppDelegate(model: AppModel(), showOnboardingAtLaunch: showOnboarding)
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         withExtendedLifetime(delegate) { app.run() }
@@ -31,10 +32,13 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var agentToolTask: Task<Void, Never>?
     private var managementWindow: NSWindow?
     private var presentedManagementID: UUID?
+    private var onboardingWindow: NSWindow?
+    private let showOnboardingAtLaunch: Bool
 
-    init(model: AppModel) {
+    init(model: AppModel, showOnboardingAtLaunch: Bool = false) {
         self.model = model
         self.store = model.store
+        self.showOnboardingAtLaunch = showOnboardingAtLaunch
         super.init()
     }
 
@@ -74,6 +78,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
             button.action = #selector(toggleDashboard(_:))
         }
         statusItem = item
+        if showOnboardingAtLaunch { showOnboarding(startAt: .welcome) }
     }
 
     @objc private func toggleDashboard(_ button: NSStatusBarButton) {
@@ -108,10 +113,11 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     @objc private func showSettings() {
         dashboard?.hide()
         if settingsWindow == nil {
-            let window = makeWindow(title: "DiskSage Settings", width: 600, height: 540, resizable: false)
+            let size = SettingsView.windowSize
+            let window = makeWindow(title: "DiskSage Settings", width: size.width, height: size.height, resizable: false)
             window.contentViewController = NSHostingController(rootView:
                 SettingsView(model: model))
-            window.setContentSize(NSSize(width: 600, height: 540))
+            window.setContentSize(size)
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -158,6 +164,10 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         let menu = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "DiskSage")
+        let about = NSMenuItem(title: "About DiskSage…", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        appMenu.addItem(about)
+        appMenu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)
@@ -223,6 +233,31 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     @objc func quitApplication() { NSApp.terminate(nil) }
 
+    @objc private func showAbout() {
+        UserDefaults.standard.set("about", forKey: "settingsSelectedTab")
+        showSettings()
+    }
+
+    private func showOnboarding(startAt step: MCPOnboardingView.Step = .connect) {
+        dashboard?.hide()
+        let window = onboardingWindow ?? makeWindow(title: "DiskSage Setup", width: 640, height: 600, resizable: true)
+        window.delegate = self
+        HostedWindowSizing.configure(window, content: MCPOnboardingView(model: model, initialStep: step,
+            finish: { [weak self] in self?.finishOnboarding() }, openGeneralSettings: { [weak self] in
+                self?.finishOnboarding()
+                UserDefaults.standard.set("general", forKey: "settingsSelectedTab")
+                self?.showSettings()
+            }), minimum: NSSize(width: 600, height: 500), preferred: NSSize(width: 640, height: 600), frameName: "Onboarding")
+        onboardingWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func finishOnboarding() {
+        MCPOnboardingPreferences.complete()
+        onboardingWindow?.orderOut(nil)
+    }
+
     private func presentManagementApproval() {
         guard let request = model.pendingManagementApproval else {
             presentedManagementID = nil
@@ -244,6 +279,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     }
 
     func windowWillClose(_ notification: Notification) {
+        if notification.object as? NSWindow === onboardingWindow { finishOnboarding() }
         if notification.object as? NSWindow === managementWindow, let id = model.pendingManagementApproval?.id {
             store.send(.rejectManagement(id))
         }
@@ -254,9 +290,13 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         case "review": showReview()
         case "history": showHistory()
         case "settings": showSettings()
-        case "schedules", "agent", "tools", "general":
+        case "tools":
+            UserDefaults.standard.set("mcp", forKey: "settingsSelectedTab")
+            showSettings()
+        case "schedules", "agent", "mcp", "general", "about":
             UserDefaults.standard.set(notification.object as? String, forKey: "settingsSelectedTab")
             showSettings()
+        case "onboarding": showOnboarding()
         case "dashboard":
             if let button = statusItem?.button { dashboard?.show(button: button, invocation: .reopen) }
         default: break
@@ -276,7 +316,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if let window = [managementWindow, reviewWindow, settingsWindow, historyWindow].compactMap({ $0 }).first(where: { $0.isVisible }) {
+        if let window = [managementWindow, onboardingWindow, reviewWindow, settingsWindow, historyWindow].compactMap({ $0 }).first(where: { $0.isVisible }) {
             dashboard?.hide()
             (window.attachedSheet ?? window).makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)

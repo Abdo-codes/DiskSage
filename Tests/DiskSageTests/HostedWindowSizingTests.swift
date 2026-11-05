@@ -5,6 +5,31 @@ import Testing
 
 @MainActor
 struct HostedWindowSizingTests {
+    @Test func settingsTabsStayVisibleAtTheDefaultWindowSize() async throws {
+        _ = NSApplication.shared
+        let name = "SettingsTabsTest-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("mcp", forKey: "settingsSelectedTab")
+        let window = makeWindow()
+        defer { window.close() }
+        let model = AppModel(store: ManagementTestSupport.store())
+        let hosting = NSHostingController(rootView: SettingsView(model: model).defaultAppStorage(defaults))
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(SettingsView.windowSize)
+        for _ in 0..<5 {
+            hosting.view.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        // Modern macOS moves the tabs into a single toolbar item. An undersized
+        // window hides every tab behind overflow, including MCP.
+        if let toolbar = window.toolbar, !toolbar.items.isEmpty {
+            #expect(toolbar.visibleItems?.map(\.itemIdentifier) == toolbar.items.map(\.itemIdentifier))
+        }
+        #expect(!window.isVisible)
+    }
+
     @Test func intrinsicContentChangesCannotResizeTheHistoryViewport() throws {
         _ = NSApplication.shared
         let name = "HistorySizingTest-\(UUID())"

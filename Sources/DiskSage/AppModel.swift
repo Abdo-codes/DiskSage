@@ -52,6 +52,7 @@ final class AppModel {
     func openCleanupLogs() { store.send(.openLogs) }
 
     func handleAgentToolRequest(_ request: AgentToolRequest) -> AgentToolReply {
+        store.send(.agentClientContact)
         store.send(.agentToolRequest(request))
         return store.agentToolReply ?? AgentToolReply(error: "DiskSage did not produce a tool reply.")
     }

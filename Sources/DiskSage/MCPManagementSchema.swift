@@ -70,7 +70,7 @@ enum MCPManagementSchema {
             properties: ["limit": integer(1, 200), "offset": integer(0, Int.max), "run_id": uuid], readOnly: true, requestID: true),
          Definition(name: "get_mcp_setup", description: "Read the same Claude Code and Codex connection commands shown in Settings.", readOnly: true),
          Definition(name: "open_window", description: "Open/focus a native DiskSage screen or its log folder.",
-            properties: ["window": choice(["dashboard", "review", "settings", "schedules", "history", "logs", "agent", "tools", "general"])], required: ["window"], requestID: true),
+            properties: ["window": choice(["dashboard", "review", "settings", "schedules", "history", "logs", "agent", "tools", "mcp", "general", "about", "onboarding"])], required: ["window"], requestID: true),
          Definition(name: "reveal_candidate", description: "Reveal one current scanned candidate in Finder; arbitrary paths are not accepted.",
             properties: ["candidate_id": uuid], required: ["candidate_id"], requestID: true),
          Definition(name: "quit_app", description: "Request DiskSage to quit. Refused while deletion is running. MCP becomes unavailable until the app is reopened; stopping the app stops schedule checks.", requestID: true)]
