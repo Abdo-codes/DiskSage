@@ -66,7 +66,7 @@ struct AgentToolParityTests {
         #expect(store.agentToolReply?.error != nil)
     }
 
-    @Test(arguments: ["dashboard", "review", "settings", "schedules", "history", "logs", "agent", "tools", "general"])
+    @Test(arguments: ["dashboard", "review", "settings", "schedules", "history", "logs", "agent", "tools", "mcp", "general", "about", "onboarding"])
     func screenRequestsReachTheNativePresentationBoundary(window: String) async throws {
         let screen = LockIsolated<String?>(nil)
         let store = ManagementTestSupport.store { $0.management.present = { value, _ in screen.setValue(value) } }

@@ -10,6 +10,8 @@ struct AgentSettingsView: View {
     @AppStorage("agentMetadataConsent") private var codexConsent = false
     @AppStorage("claudeMetadataConsent") private var claudeConsent = false
     @State private var appleUnavailableReason = AppleAdvisor.unavailableReason
+    @AppStorage("builtInAgentCleanupEnabled") private var builtInCleanup = false
+    @AppStorage("agentCleanupPolicy") private var cleanupPolicy = AgentCleanupPolicy.confirm.rawValue
 
     var body: some View {
         Section("Cleanup Agent") {
@@ -32,6 +34,15 @@ struct AgentSettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appleUnavailableReason = AppleAdvisor.unavailableReason
+        }
+        Section("Advisor tools") {
+            Toggle("Allow built-in advisors to request cleanup", isOn: $builtInCleanup)
+                .disabled(cleanupPolicy == AgentCleanupPolicy.disabled.rawValue)
+            Text("Requests follow the cleanup access policy in MCP settings. Advisors receive metadata only.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("MCP settings…") {
+                NotificationCenter.default.post(name: .diskSageOpenWindow, object: "mcp")
+            }
         }
     }
 }

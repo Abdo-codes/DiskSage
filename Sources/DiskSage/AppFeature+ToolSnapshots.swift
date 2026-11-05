@@ -17,6 +17,12 @@ extension AppFeature {
                 "recommendation_count": .integer(state.recommendations.count), "advice_summary": .string(state.recommendationSummary),
                 "disk_usage": try .encode(state.diskUsage), "last_scan": try .encode(state.lastScanDate),
                 "error": try .encode(state.errorMessage), "schedule_error": try .encode(state.scheduleError)]
+            let information = AppInformation()
+            result["app"] = .object(["name": .string("DiskSage"), "version": .string(information.displayVersion),
+                "developer": .string("Abdo Eaita"), "license": .string("MIT"),
+                "source_url": .string(AppInformation.repository.absoluteString),
+                "documentation_url": .string(AppInformation.documentation.absoluteString)])
+            result["last_mcp_contact"] = try .encode(state.lastMCPContact)
             if let report = state.cleanupReport {
                 result["cleanup_report"] = .object(["estimated_removed_bytes": .integer(Int(report.estimatedRemovedBytes)),
                     "actual_recovered_bytes": .integer(Int(report.actualRecoveredBytes)),
@@ -55,7 +61,8 @@ extension AppFeature {
         case "get_settings": return .object(management.settings())
         case "get_mcp_setup":
             let setup = MCPConnectionInstructions.current
-            return .object(["claude": .string(setup.claudeCommand), "codex": .string(setup.codexCommand), "stdio": .string(setup.launchCommand)])
+            return .object(["claude": .string(setup.claudeCommand), "codex": .string(setup.codexCommand), "stdio": .string(setup.launchCommand),
+                "verification_prompt": .string(MCPConnectionInstructions.verificationPrompt)])
         case "list_advisors":
             let settings = management.settings()
             return .array(AgentProvider.allCases.map { provider in

@@ -5,6 +5,13 @@ scanner, scheduler, deletion coordinator, settings, and logs. Open DiskSage firs
 Existing Claude Code and Codex setup commands remain valid. Restart or reconnect
 the client after updating DiskSage to discover new tools.
 
+Optional guided setup is available on first launch and under **Settings → About →
+Connect an agent**. No skill package is needed. Its verification step waits for a
+fresh tool request received by the GUI; this does not verify advisor authentication.
+**Settings → MCP** provides one-click registration for installed Claude Code and
+Codex CLIs, a copyable stdio JSON entry for other clients, connection verification,
+and cleanup access controls. Registration preserves conflicting existing entries.
+
 Schemas are maintained in `MCPServer.swift` and `MCPManagementSchema.swift`.
 The protocol follows the [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 Unknown keys, malformed identifiers, permission overrides, and remote paths are
@@ -24,16 +31,18 @@ Check `isError` before parsing: connection errors can contain only text.
 | Request selected-item deletion, including sensitive items | `delete_candidates` |
 | Cancel scanning/advice; decline confirmations | `cancel_operation`, `dismiss_confirmation` |
 | Create/list/edit/pause/resume/remove folder schedules | `create_schedule`, `list_schedules`, `update_schedule`, `pause_schedule`, `remove_schedule` |
-| Read/change all General, Agent, and Agent Tools settings | `get_settings`, `update_settings` |
+| Read/change all General, Agent, and MCP access settings | `get_settings`, `update_settings` |
 | Provider configuration/readiness and model choices | `list_advisors`, `list_models` |
 | Ask Claude, Codex, Apple, or Ollama for advice | `request_advice` |
 | History and individual cleanup log events | `get_history`, `get_logs` |
-| Connection commands shown in Settings | `get_mcp_setup` |
+| Connection commands and read-only verification prompt | `get_mcp_setup` |
 | Open app screens/log folder; quit | `open_window`, `quit_app` |
 
 Presentation-only actions such as resizing a window are handled by macOS.
 The API returns setup text instead of copying to the clipboard. Launch-at-login
 registration can still require approval in macOS System Settings.
+`get_dashboard` also exposes app version/project metadata in `app` and the most
+recent client request timestamp in `last_mcp_contact` (null before any request).
 
 ## Requests, results, and retries
 
@@ -189,7 +198,7 @@ Read `tools/list` for complete strict schemas. Common examples:
 | `get_history` | Optional `offset`, `limit` |
 | `get_logs` | Optional `run_id`, `offset`, `limit` |
 | `reveal_candidate` | Current `candidate_id` |
-| `open_window` | `window`: `dashboard`, `review`, `settings`, `schedules`, `history`, `logs`, `agent`, `tools`, `general` |
+| `open_window` | `window`: `dashboard`, `review`, `settings`, `schedules`, `history`, `logs`, `agent`, `mcp`, `general`, `about`, `onboarding`; `tools` remains an alias for `mcp` |
 | `quit_app` | None besides the UUID; MCP is unavailable after quitting |
 
 `set_selection` with empty IDs and mode `replace` clears the selection. Adding

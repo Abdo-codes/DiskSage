@@ -50,6 +50,7 @@ struct AppFeature {
         var activeSchedule: ScheduledCleanupRun?
         var pendingManagementApproval: ManagementApproval?
         var managedRequests: [UUID: AgentToolRequest] = [:]
+        var lastMCPContact: Date?
 
         var isScanning: Bool { operation == .scanning || operation == .automaticScan }
         var isAdvising: Bool { operation == .advising }
@@ -97,6 +98,7 @@ struct AppFeature {
         case approveManagement(UUID)
         case rejectManagement(UUID)
         case managementFinished(UUID, Result<ToolValue, FeatureFailure>)
+        case agentClientContact
     }
 
     enum CancelID { case scan, advisor, dashboard, monitor, monitorCheck, schedules }
@@ -117,6 +119,9 @@ struct AppFeature {
                  .requestLowRiskCleanup, .confirmDeletion, .dismissConfirmation:
                 return reduceCleanup(state: &state, action: action)
             case let .agentToolRequest(request): return handleAgentRequest(state: &state, request: request)
+            case .agentClientContact:
+                state.lastMCPContact = now
+                return .none
             case .approveManagement, .rejectManagement, .managementFinished:
                 return reduceManagement(state: &state, action: action)
             case .startMonitoring, .stopMonitoring, .monitorTick, .capacityRead, .automaticCheckLogged:

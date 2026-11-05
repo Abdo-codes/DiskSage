@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
+    static let windowSize = CGSize(width: 800, height: 600)
     @Bindable var model: AppModel
     @AppStorage("automaticCleanupEnabled") private var automaticCleanupEnabled = true
     @AppStorage("cleanupThresholdGiB") private var cleanupThresholdGiB = 15
@@ -19,11 +20,9 @@ struct SettingsView: View {
                 .padding(16)
                 .tabItem { Label("Agent", systemImage: "sparkles") }
                 .tag("agent")
-            Form { AgentToolSettingsView(model: model) }
-                .formStyle(.grouped)
-                .padding(16)
-                .tabItem { Label("Agent Tools", systemImage: "point.3.connected.trianglepath.dotted") }
-                .tag("tools")
+            MCPSettingsView(model: model)
+                .tabItem { Label("MCP", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag("mcp")
             Form {
                 Section("Safety") {
                     Label("Advisors receive metadata only. Authorized tools can request low-risk cleanup.", systemImage: "lock.shield")
@@ -50,9 +49,13 @@ struct SettingsView: View {
             .padding(16)
             .tabItem { Label("General & Safety", systemImage: "gearshape") }
             .tag("general")
+            AboutView()
+                .tabItem { Label("About", systemImage: "info.circle") }
+                .tag("about")
         }
         .padding(.top, 12)
-        .frame(width: 600, height: 540)
+        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
+        .onAppear { if selectedTab == "tools" { selectedTab = "mcp" } }
         .onReceive(NotificationCenter.default.publisher(for: .diskSageSettingsChanged)) { _ in
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }

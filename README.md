@@ -94,7 +94,7 @@ and generic `build` folders are excluded from low-disk and agent cleanup.
 | Manual selection | Select items in Review, then **Delete Selected** | Always |
 | Clean now | **Clean Low-Risk Items…** in the dashboard or menus | Always; scans first if needed |
 | Low-disk automation | Startup and hourly capacity checks | No additional prompt for low-risk targets |
-| Agent-requested cleanup | MCP tool or an explicitly enabled built-in advisor | Depends on **Agent Tools → Cleanup requests** |
+| Agent-requested cleanup | MCP tool or an explicitly enabled built-in advisor | Depends on **MCP → Cleanup requests** |
 | Scheduled folders | Daily, weekly, or once at a chosen time | Custom folder contents require explicit authorization when configured |
 
 Configure startup, low-disk automation, and the threshold in
@@ -162,15 +162,28 @@ read-only sandbox. Every response must cover the scanned IDs exactly once;
 invalid or cancelled responses leave the selection unchanged. Advice requests
 have a 90-second timeout and can be cancelled.
 
-By default, built-in advisors only recommend. Enabling **Agent Tools → Allow
+By default, built-in advisors only recommend. Enabling **Agent → Allow
 built-in advisors to request cleanup** permits a structured host cleanup request
 under the same agent policy described below. The app still validates the request
 and performs a fresh low-risk scan.
 
 ## Connect Claude Code, Codex, or another MCP client
 
-Keep the GUI app open. After installing it at `/Applications/DiskSage.app`, use
-**Settings → Agent Tools** to copy a setup command, or run:
+First launch offers an optional guided setup: learn the cleanup basics, connect
+your client, then verify the connection with a read-only request.
+No installable skill is required. Existing users can open the guide from
+**Settings → About → Connect an agent**; updating the app does not interrupt them
+with setup. The About tab also includes the app version, documentation, source,
+license, and issue links.
+
+Keep the GUI app open. In **Settings → MCP**, click **Connect** beside Claude Code
+or Codex. DiskSage uses the installed CLI to save its user-wide connection, then
+reads it back to verify the command. Existing custom or disabled entries are left
+intact. No Terminal is needed for this setup; restart/reconnect your client afterward.
+If a CLI is missing, set its path in **Agent → Advanced**, or expand **Manual setup
+& other clients** to copy commands or stdio configuration JSON.
+
+After installing at `/Applications/DiskSage.app`, the equivalent commands are:
 
 ```sh
 claude mcp add --transport stdio --scope user disksage -- '/Applications/DiskSage.app/Contents/MacOS/DiskSage' --mcp
@@ -181,8 +194,10 @@ Start a new client session to discover the tools. For another MCP client, choose
 **stdio**, use the app executable as the command, and pass `--mcp` as its argument.
 The stdio process forwards requests to the GUI coordinator over a private,
 same-user Unix socket. Server readiness does not mean a client is connected.
+The guide's **Verify** step waits for a new tool request received by the running
+app. It verifies client connectivity, independently of advisor sign-in or quota.
 
-**Settings → Agent Tools → Cleanup requests** has three policies:
+**Settings → MCP → Cleanup requests** has three policies:
 
 - **Confirm in DiskSage** — the default; review and approve each cleanup.
 - **Disabled** — reject cleanup requests; status and scanning remain available.
