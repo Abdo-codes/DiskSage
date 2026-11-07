@@ -31,7 +31,7 @@ struct ScheduledFolderPolicyTests {
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
         try Data("Keep".utf8).write(to: outside.appending(path: "keep.txt"))
         try FileManager.default.createSymbolicLink(at: fixture.folder.appending(path: "link"), withDestinationURL: outside)
-        let targets = try ScheduledFolderPolicy.scan(fixture.schedule)
+        let targets = try ScheduledFolderPolicy.scan(fixture.schedule, activity: { .idle })
         let report = await ScheduledFolderPolicy.delete(fixture.schedule, candidates: targets,
             repository: fixture.repository, logger: fixture.logger, progress: { _ in })
         #expect(report.failures.isEmpty && report.loggingError == nil)
@@ -45,7 +45,7 @@ struct ScheduledFolderPolicyTests {
     @Test(arguments: ["paused", "removed", "scope", "identity", "outsideTarget"])
     func revokedOrChangedAuthorizationNeverDeletes(scenario: String) async throws {
         var fixture = try Fixture(); defer { fixture.remove() }
-        var targets = try ScheduledFolderPolicy.scan(fixture.schedule)
+        var targets = try ScheduledFolderPolicy.scan(fixture.schedule, activity: { .idle })
         switch scenario {
         case "paused": fixture.schedule.isEnabled = false
         case "removed": try fixture.repository.save([])
@@ -67,7 +67,7 @@ struct ScheduledFolderPolicyTests {
     @Test func customFoldersRequireExplicitScopeAndReplacedFoldersRequireNewAuthorization() throws {
         let fixture = try Fixture(); defer { fixture.remove() }
         var low = fixture.schedule; low.scope = .lowRisk
-        #expect(throws: FeatureFailure.self) { try ScheduledFolderPolicy.scan(low) }
+        #expect(throws: FeatureFailure.self) { try ScheduledFolderPolicy.scan(low, activity: { .idle }) }
         // Keep the original inode alive so this cannot accidentally test inode reuse.
         try FileManager.default.moveItem(at: fixture.folder, to: fixture.root.appending(path: "old"))
         try FileManager.default.createDirectory(at: fixture.folder, withIntermediateDirectories: true)
@@ -91,23 +91,18 @@ struct ScheduledFolderPolicyTests {
         }
     }
 
-    @Test func lowRiskGeneratedFolderCanBeScheduledAndEmptyFilesAreNotIgnored() async throws {
+    @Test func lowRiskScheduleKeepsRecentAndUnrecognizedFiles() throws {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let root = home.appending(path: "Developer/.disksage-schedule-test-\(UUID())", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
         let folder = root.appending(path: ".build", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data().write(to: folder.appending(path: "empty"))
+        try FileManager.default.createDirectory(at: folder.appending(path: "debug"), withIntermediateDirectories: true)
+        try Data("recent".utf8).write(to: folder.appending(path: "debug/recent.o"))
+        try Data("evidence".utf8).write(to: folder.appending(path: "run.log"))
         let value = CleanupSchedule(folder: folder, folderIdentity: try ScheduledFolderPolicy.identity(of: folder))
-        let targets = try ScheduledFolderPolicy.scan(value)
-        #expect(targets.count == 1 && targets[0].risk == .low && targets[0].deletionMode == .contents)
-        #expect(targets[0].size == 0)
-        let repository = CleanupScheduleRepository(fileURL: root.appending(path: "schedules.json"))
-        try repository.save([value])
-        let report = await ScheduledFolderPolicy.delete(value, candidates: targets, repository: repository,
-            logger: CleanupLogger(directory: root.appending(path: "logs")), progress: { _ in })
-        #expect(report.failures.isEmpty)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
-        #expect(try ScheduledFolderPolicy.scan(value).isEmpty)
+        #expect(try ScheduledFolderPolicy.scan(value, activity: { .idle }).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "run.log").path))
+        let unknown = home.appending(path: "Library/Caches/UnknownApp")
+        #expect(throws: FeatureFailure.self) { try ScheduledFolderPolicy.lowRiskCategory(unknown) }
     }
 }

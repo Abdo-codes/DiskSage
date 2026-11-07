@@ -2,6 +2,9 @@ import ComposableArchitecture
 import Foundation
 
 extension AppFeature {
+    static let capacityCheckIntervalSeconds = 60
+    static let automaticRetryInterval: TimeInterval = 15 * 60
+
     func reduceMonitoring(state: inout State, action: Action) -> EffectOf<Self> {
         switch action {
         case .startMonitoring:
@@ -10,10 +13,13 @@ extension AppFeature {
             return .run { [clock] send in
                 await send(.monitorTick)
                 while !Task.isCancelled {
-                    try await clock.sleep(for: .seconds(3_600))
+                    try await clock.sleep(for: .seconds(Self.capacityCheckIntervalSeconds))
                     await send(.monitorTick)
                 }
             }.cancellable(id: CancelID.monitor)
+        case .monitoringPreferencesChanged:
+            state.automaticRetryAfter = nil
+            return state.isMonitoring ? .send(.monitorTick) : .none
         case .stopMonitoring:
             state.isMonitoring = false
             if let id = state.automaticCheckID, state.operationID == id, state.operation == .automaticScan {
@@ -38,12 +44,17 @@ extension AppFeature {
             state.freeSpaceBytes = available
             let preferences = client.preferences()
             let threshold = Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024
+            // A recovered disk resets the cooldown so the next threshold crossing
+            // is handled immediately, even if the previous cleanup was recent.
+            if available > threshold { state.automaticRetryAfter = nil }
+            let coolingDown = state.automaticRetryAfter.map { now < $0 } ?? false
             let eligible = preferences.automaticEnabled && !wasBusy && !state.isBusy &&
-                revision == state.activityRevision && available <= threshold
+                revision == state.activityRevision && available <= threshold && !coolingDown
             let reason: String
             if !preferences.automaticEnabled { reason = "Automatic cleanup is disabled." }
             else if wasBusy || state.isBusy || revision != state.activityRevision { reason = "Skipped because another operation is active or user activity changed." }
             else if available > threshold { reason = "Free space is above the \(preferences.thresholdGiB) GiB threshold." }
+            else if coolingDown { reason = "Free space is low; waiting for the 15-minute automatic cleanup retry cooldown." }
             else { reason = "Free space is at or below the \(preferences.thresholdGiB) GiB threshold; starting a scan for low-risk items." }
             if eligible {
                 // Reserve the shared operation while its mandatory check log is being persisted.

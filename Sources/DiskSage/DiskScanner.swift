@@ -11,13 +11,14 @@ struct DiskScanner: Sendable {
         let deletionMode: DeletionMode
     }
 
-    private typealias Seed = Location
     private let locations: [Location]?
-
-    init(locations: [Location]? = nil) { self.locations = locations }
+    private let activity: @Sendable () throws -> CleanupActivity
+    init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() }) {
+        self.locations = locations; self.activity = activity
+    }
 
     func scan() async -> [CleanupCandidate] {
-        let task = Task.detached(priority: .utility) { Self.scanSynchronously(locations: locations) }
+        let task = Task.detached(priority: .utility) { Self.scanSynchronously(locations: locations, activity: activity) }
         return await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
             let results = await task.value
@@ -25,95 +26,41 @@ struct DiskScanner: Sendable {
         } onCancel: { task.cancel() }
     }
 
-    private static func scanSynchronously(locations: [Location]?) -> [CleanupCandidate] {
+    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity) -> [CleanupCandidate] {
         guard !Task.isCancelled else { return [] }
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL
-        let developer = home.appending(path: "Developer", directoryHint: .isDirectory)
-
-        var seeds: [Seed] = locations ?? [
-            Seed(
-                url: home.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
-                name: "Xcode DerivedData",
-                category: .build,
-                risk: .low,
-                reason: "Generated indexes and build products; Xcode recreates them.",
-                deletionMode: .contents
-            ),
-            Seed(
-                url: home.appending(path: "Library/Developer/Xcode/Archives", directoryHint: .isDirectory),
-                name: "Xcode Archives",
-                category: .archive,
-                risk: .high,
-                reason: "Contains shipped archives and dSYMs. Delete only when no longer needed.",
-                deletionMode: .contents
-            ),
-            Seed(
-                url: home.appending(path: "Library/Developer/CoreSimulator/Devices", directoryHint: .isDirectory),
-                name: "Simulator Devices",
-                category: .simulator,
-                risk: .high,
-                reason: "Removes installed simulator device state and app data.",
-                deletionMode: .simulatorDevices
-            ),
-            Seed(
-                url: home.appending(path: ".npm/_cacache", directoryHint: .isDirectory),
-                name: "npm Package Cache",
-                category: .cache,
-                risk: .low,
-                reason: "Downloaded npm packages; npm restores them when needed.",
-                deletionMode: .item
-            ),
-            Seed(
-                url: URL(fileURLWithPath: "/private/var/tmp/_bazel_\(NSUserName())", isDirectory: true),
-                name: "Bazel Output Cache",
-                category: .build,
-                risk: .low,
-                reason: "Generated Bazel output and repository cache.",
-                deletionMode: .item
-            )
-        ]
-
+        // A failed/incomplete activity check never turns into permission to delete.
+        guard let currentActivity = try? activity() else { return [] }
+        let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
+        var seeds = locations ?? defaultLocations(home: home)
         if locations == nil {
-            let cacheRoots = [
-                home.appending(path: "Library/Caches", directoryHint: .isDirectory),
-                home.appending(path: ".cache", directoryHint: .isDirectory)
-            ]
-            for root in cacheRoots {
-                seeds += childDirectories(of: root).map { child in
-                    Seed(
-                        url: child,
-                        name: child.lastPathComponent,
-                        category: .cache,
-                        risk: .low,
-                        reason: "Application or command-line cache; it can be regenerated.",
-                        deletionMode: .item
-                    )
+            for root in GeneratedCleanupScope.discoveryRoots(home: home) {
+                seeds += GeneratedBuildDiscovery().directories(under: root).map {
+                    Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
+                        category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
                 }
             }
-
-            seeds += buildDirectories(under: developer).map { url in
-                let relative = url.path.replacingOccurrences(of: developer.path + "/", with: "")
-                return Seed(
-                    url: url,
-                    name: relative,
-                    category: .build,
-                    risk: url.lastPathComponent == "build" ? .medium : .low,
-                    reason: "Generated project build output. Review generic build folders before deletion.",
-                    deletionMode: .item
-                )
-            }
-
         }
-
         var seen = Set<String>()
-        let measured = seeds.compactMap { seed -> CleanupCandidate? in
-            let url = seed.url.standardizedFileURL
+        let candidates = seeds.compactMap { seed -> CleanupCandidate? in
+            let url = CleanupPath.fileURL(seed.url)
             guard !Task.isCancelled, seen.insert(url.path).inserted else { return nil }
+            if seed.deletionMode == .generatedFiles {
+                guard let rule = GeneratedCleanupScope.rule(for: url, home: home) else { return nil }
+                return try? GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category,
+                                                       rule: rule, activity: currentActivity)
+            }
+            guard !currentActivity.contains(url) else { return nil }
             return inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
                            reason: seed.reason, deletionMode: seed.deletionMode)
         }
-        return validated(measured).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+        return validated(candidates).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+    }
+
+    private static func defaultLocations(home: URL) -> [Location] {
+        GeneratedCleanupScope.fixedLocations(home: home).map { url, name, rule in
+            Location(url: url, name: name, category: rule == .buildArtifacts || rule == .goBuild ? .build : .cache,
+                risk: .low, reason: "Verified generated files only", deletionMode: .generatedFiles)
+        }
     }
 
     static func validated(_ candidates: [CleanupCandidate]) -> [CleanupCandidate] {
@@ -121,7 +68,7 @@ struct DiskScanner: Sendable {
         return candidates.filter { (try? SafetyPolicy().validate($0)) != nil }
     }
 
-    /// Only advertise targets that the deletion service can accept; deletion validates them again later.
+    /// Legacy explicit whole-folder operations retain their separate authorization path.
     static func inspect(_ url: URL, name: String, category: CandidateCategory, risk: RiskLevel,
                         reason: String, deletionMode: DeletionMode = .item) -> CleanupCandidate? {
         guard !Task.isCancelled, FileManager.default.fileExists(atPath: url.path),
@@ -134,72 +81,13 @@ struct DiskScanner: Sendable {
             risk: risk, reason: reason, identity: identity, deletionMode: deletionMode)
     }
 
-    private static func childDirectories(of root: URL) -> [URL] {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
-        guard let children = try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: Array(keys),
-            options: []
-        ) else { return [] }
-
-        return children.filter { url in
-            guard let values = try? url.resourceValues(forKeys: keys) else { return false }
-            return values.isDirectory == true && values.isSymbolicLink != true
-        }
-    }
-
-    private static func buildDirectories(under root: URL) -> [URL] {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: keys,
-            options: [.skipsPackageDescendants]
-        ) else { return [] }
-
-        var results: [URL] = []
-        for case let url as URL in enumerator {
-            guard !Task.isCancelled else { return [] }
-            let depth = url.pathComponents.count - root.pathComponents.count
-            if depth > 4 {
-                enumerator.skipDescendants()
-                continue
-            }
-
-            guard let values = try? url.resourceValues(forKeys: Set(keys)),
-                  values.isDirectory == true,
-                  values.isSymbolicLink != true else { continue }
-
-            let allowedNames = [".build", "build", "DerivedData", "derived-data"]
-            if allowedNames.contains(url.lastPathComponent), isLikelyGeneratedBuildDirectory(url) {
-                results.append(url)
-                enumerator.skipDescendants()
-            }
-        }
-        return results
-    }
-
     private static func isSymbolicLink(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
     }
 
     private static func containsRunningExecutable(_ url: URL) -> Bool {
-        guard let executable = Bundle.main.executableURL?.standardizedFileURL else { return false }
-        return executable.path.hasPrefix(url.path + "/")
-    }
-
-    private static func isLikelyGeneratedBuildDirectory(_ url: URL) -> Bool {
-        guard url.lastPathComponent == "build" else { return true }
-        let projectRoot = url.deletingLastPathComponent()
-        let markers = ["Package.swift", "project.yml", "build.gradle", "build.gradle.kts", "pom.xml"]
-        if markers.contains(where: { FileManager.default.fileExists(atPath: projectRoot.appending(path: $0).path) }) {
-            return true
-        }
-        guard let siblings = try? FileManager.default.contentsOfDirectory(
-            at: projectRoot,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return false }
-        return siblings.contains { ["xcodeproj", "xcworkspace"].contains($0.pathExtension) }
+        guard let executable = Bundle.main.executableURL.map(CleanupPath.fileURL) else { return false }
+        return executable.path.hasPrefix(CleanupPath.fileURL(url).path + "/")
     }
 
     private static func fileIdentity(of url: URL) -> FileIdentity? {
@@ -210,33 +98,17 @@ struct DiskScanner: Sendable {
 
     static func allocatedSize(of root: URL) -> Int64? {
         guard !Task.isCancelled else { return nil }
-        let keys: Set<URLResourceKey> = [
-            .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .fileAllocatedSizeKey,
-            .totalFileAllocatedSizeKey
-        ]
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: Array(keys),
-            options: [],
-            errorHandler: { _, _ in true }
-        ) else {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys),
+            options: [], errorHandler: { _, _ in true }) else {
             let values = try? root.resourceValues(forKeys: keys)
             return Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
         }
-
         var total: Int64 = 0
         for case let fileURL as URL in enumerator {
             guard !Task.isCancelled else { return nil }
-            guard let values = try? fileURL.resourceValues(forKeys: keys) else { continue }
-            if values.isSymbolicLink == true {
-                enumerator.skipDescendants()
-                continue
-            }
-            if values.isRegularFile == true {
-                total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
-            }
+            guard let values = try? fileURL.resourceValues(forKeys: keys), values.isSymbolicLink != true else { continue }
+            if values.isRegularFile == true { total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0) }
         }
         return total
     }

@@ -21,7 +21,7 @@ struct ReviewWindowSizingTests {
         #expect(size.height >= min(660, available.height))
         #expect(screen.visibleFrame.contains(window.frame))
         #expect(window.contentMinSize.width == 800)
-        #expect(window.contentMinSize.height == 520)
+        #expect(window.contentMinSize.height == 560)
         window.close()
     }
 }

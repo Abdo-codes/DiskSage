@@ -83,8 +83,8 @@ struct DashboardPresentation {
 
 extension AppFeature.State {
     var dashboardPresentation: DashboardPresentation {
-        DashboardPresentation(operation: operation, hasScanned: lastScanDate != nil,
+        DashboardPresentation(operation: worktrees.removing ? .cleaning : (worktrees.loading ? .scanning : operation), hasScanned: lastScanDate != nil,
             candidateCount: candidates.count, lowRiskCount: lowRiskCandidates.count,
-            awaitingConfirmation: pendingDeletionRequest != nil)
+            awaitingConfirmation: pendingDeletionRequest != nil || (worktrees.pending != nil && !worktrees.removing))
     }
 }

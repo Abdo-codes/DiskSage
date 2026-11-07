@@ -48,6 +48,8 @@ struct CleanupScheduler {
                                 do {
                                     try service.remove(candidate) { counter.recordRemoved() }
                                     result = CleanupItemResult(candidate: candidate, removedBytes: candidate.size, errorDescription: nil)
+                                } catch let error as PartialCleanupFailure {
+                                    result = CleanupItemResult(candidate: candidate, removedBytes: error.removedBytes, errorDescription: error.localizedDescription)
                                 } catch {
                                     result = CleanupItemResult(candidate: candidate, removedBytes: 0, errorDescription: error.localizedDescription)
                                 }

@@ -52,7 +52,7 @@ extension DiskSageClient: DependencyKey {
                 return result
             }.value
         },
-        freeSpace: { availableSpace() }, capacity: { availableSpace() },
+        freeSpace: { availableSpace() }, capacity: { await Task.detached(priority: .utility) { availableSpace() }.value },
         preferences: { .read() },
         logCheck: { event in try await Task.detached(priority: .utility) { try CleanupLogger.shared.append(event) }.value },
         openLogs: {

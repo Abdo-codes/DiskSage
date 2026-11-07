@@ -40,6 +40,8 @@ struct AppFeature {
         var agentToolReply: AgentToolReply?
         var isMonitoring = false
         var automaticCheckID: UUID?
+        var automaticRetryAfter: Date?
+        var storageNotifications = DiskSpaceNotificationObserver.Status()
         var activityRevision = 0
         var dashboardRevision = 0
         var schedules: [CleanupSchedule] = []
@@ -51,11 +53,12 @@ struct AppFeature {
         var pendingManagementApproval: ManagementApproval?
         var managedRequests: [UUID: AgentToolRequest] = [:]
         var lastMCPContact: Date?
+        var worktrees = WorktreesFeature.State()
 
         var isScanning: Bool { operation == .scanning || operation == .automaticScan }
         var isAdvising: Bool { operation == .advising }
-        var isCleaning: Bool { operation == .cleaning || operation == .automaticCleanup }
-        var isBusy: Bool { operation != .idle || pendingDeletionRequest != nil || pendingManagementApproval != nil }
+        var isCleaning: Bool { operation == .cleaning || operation == .automaticCleanup || worktrees.removing }
+        var isBusy: Bool { operation != .idle || pendingDeletionRequest != nil || pendingManagementApproval != nil || worktrees.isBusy }
         var lowRiskCandidates: [CleanupCandidate] { candidates.filter { $0.risk == .low } }
         var selectedCandidates: [CleanupCandidate] { candidates.filter { selection.contains($0.id) } }
         var selectedBytes: Int64 { selectedCandidates.reduce(0) { $0 + $1.size } }
@@ -85,6 +88,8 @@ struct AppFeature {
         case startMonitoring
         case stopMonitoring
         case monitorTick
+        case monitoringPreferencesChanged
+        case storageNotificationsChanged(DiskSpaceNotificationObserver.Status)
         case capacityRead(UUID, Int, Bool, Int64)
         case automaticCheckLogged(UUID, Bool, FeatureFailure?)
         case openLogs
@@ -99,6 +104,7 @@ struct AppFeature {
         case rejectManagement(UUID)
         case managementFinished(UUID, Result<ToolValue, FeatureFailure>)
         case agentClientContact
+        case worktrees(WorktreesFeature.Action)
     }
 
     enum CancelID { case scan, advisor, dashboard, monitor, monitorCheck, schedules }
@@ -109,10 +115,12 @@ struct AppFeature {
     @Dependency(\.schedules) var schedules
     @Dependency(\.calendar) var calendar
     @Dependency(\.management) var management
+    @Dependency(\.worktrees) var worktreeClient
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
+            case let .worktrees(action): return reduceWorktrees(state: &state, action: action)
             case .scanRequested, .scanFinished, .advisorRequested, .advisorFinished, .cancelOperation:
                 return reduceOperations(state: &state, action: action)
             case .deleteApproved, .cleanupProgress, .cleanupFinished, .requestDeletion,
@@ -122,9 +130,12 @@ struct AppFeature {
             case .agentClientContact:
                 state.lastMCPContact = now
                 return .none
+            case let .storageNotificationsChanged(status):
+                state.storageNotifications = status
+                return .none
             case .approveManagement, .rejectManagement, .managementFinished:
                 return reduceManagement(state: &state, action: action)
-            case .startMonitoring, .stopMonitoring, .monitorTick, .capacityRead, .automaticCheckLogged:
+            case .startMonitoring, .stopMonitoring, .monitorTick, .monitoringPreferencesChanged, .capacityRead, .automaticCheckLogged:
                 return reduceMonitoring(state: &state, action: action)
             case .startScheduling, .stopScheduling, .scheduleTick, .saveSchedule,
                  .setScheduleEnabled, .removeSchedule, .scheduledScanFinished:

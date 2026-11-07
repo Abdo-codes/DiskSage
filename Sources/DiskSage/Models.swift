@@ -47,6 +47,7 @@ enum DeletionMode: String, Codable, Sendable {
     case item
     case contents
     case simulatorDevices
+    case generatedFiles
 }
 
 struct FileIdentity: Codable, Hashable, Sendable {
@@ -64,6 +65,7 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
     let reason: String
     let identity: FileIdentity
     let deletionMode: DeletionMode
+    let generatedSnapshot: GeneratedCleanupSnapshot?
 
     init(
         id: UUID = UUID(),
@@ -74,7 +76,8 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
         risk: RiskLevel,
         reason: String,
         identity: FileIdentity = FileIdentity(device: 0, inode: 0),
-        deletionMode: DeletionMode = .item
+        deletionMode: DeletionMode = .item,
+        generatedSnapshot: GeneratedCleanupSnapshot? = nil
     ) {
         self.id = id
         self.url = url
@@ -85,6 +88,7 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
         self.reason = reason
         self.identity = identity
         self.deletionMode = deletionMode
+        self.generatedSnapshot = generatedSnapshot
     }
 }
 
@@ -122,7 +126,7 @@ struct CleanupReport: Equatable, Sendable {
     var removedEntryCount = 0
 
     var estimatedRemovedBytes: Int64 {
-        items.filter(\.succeeded).reduce(0) { $0 + $1.removedBytes }
+        items.reduce(0) { $0 + $1.removedBytes }
     }
 
     var actualRecoveredBytes: Int64 {

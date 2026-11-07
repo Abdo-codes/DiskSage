@@ -12,11 +12,12 @@ enum SafetyPolicyError: LocalizedError {
 }
 
 struct SafetyPolicy: Sendable {
+    var home = FileManager.default.homeDirectoryForCurrentUser
+    var now = Date()
     func validate(_ candidate: CleanupCandidate) throws {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL
+        let home = CleanupPath.fileURL(self.home)
         let developer = home.appending(path: "Developer", directoryHint: .isDirectory)
-        let url = candidate.url.standardizedFileURL
+        let url = CleanupPath.fileURL(candidate.url)
         let path = url.path
 
         guard path != "/", url != home, url != developer else {
@@ -29,12 +30,18 @@ struct SafetyPolicy: Sendable {
            executable.path.hasPrefix(url.path + "/") {
             throw SafetyPolicyError.refused("DiskSage cannot delete the directory containing its running executable.")
         }
-        guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
-            throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+        if candidate.deletionMode == .generatedFiles {
+            guard let snapshot = candidate.generatedSnapshot,
+                  snapshot.fileCount > 0, candidate.identity != FileIdentity(device: 0, inode: 0),
+                  snapshot.cutoff.timeIntervalSince1970.isFinite,
+                  snapshot.cutoff <= now.addingTimeInterval(-GeneratedCleanupPolicy.minimumAge + 1), snapshot.digest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+                  GeneratedCleanupScope.rule(for: url, home: home) == snapshot.rule else {
+                throw SafetyPolicyError.refused("The generated-file scope is invalid. Scan again.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            return
         }
-        try rejectSymlinkedAncestors(of: url)
-        try verifyIdentity(of: url, expected: candidate.identity)
-
         let exactTargets = [
             home.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
             home.appending(path: "Library/Developer/Xcode/Archives", directoryHint: .isDirectory),
@@ -43,18 +50,25 @@ struct SafetyPolicy: Sendable {
             URL(fileURLWithPath: "/private/var/tmp/_bazel_\(NSUserName())", isDirectory: true)
         ].map(\.standardizedFileURL)
 
-        if exactTargets.contains(url) { return }
 
         let cacheRoots = [
             home.appending(path: "Library/Caches", directoryHint: .isDirectory),
             home.appending(path: ".cache", directoryHint: .isDirectory)
         ].map(\.standardizedFileURL)
-        if cacheRoots.contains(where: { url.deletingLastPathComponent() == $0 }) { return }
 
         let buildNames = Set([".build", "build", "DerivedData", "derived-data"])
-        if path.hasPrefix(developer.path + "/"), buildNames.contains(url.lastPathComponent) { return }
-
-        throw SafetyPolicyError.refused("The path is outside DiskSage’s cleanup allowlist.")
+        guard exactTargets.contains(url) || cacheRoots.contains(where: { url.deletingLastPathComponent() == $0 }) ||
+              path.hasPrefix(developer.path + "/") && buildNames.contains(url.lastPathComponent) else {
+            throw SafetyPolicyError.refused("The path is outside DiskSage’s cleanup allowlist.")
+        }
+        // Authorize scope before enumerating any contents (including cloud-backed folders).
+        guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+            throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+        }
+        try rejectSymlinkedAncestors(of: url)
+        try verifyIdentity(of: url, expected: candidate.identity)
+        do { try WorktreePathGuard.rejectSourceContainers(url) }
+        catch { throw SafetyPolicyError.refused(error.localizedDescription) }
     }
 
     private func rejectSymlinkedAncestors(of url: URL) throws {

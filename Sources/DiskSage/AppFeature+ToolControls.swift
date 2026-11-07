@@ -15,6 +15,16 @@ extension AppFeature {
             }
             finishManagedValue(state: &state, id: id, value: try .encode(state.selection.sorted { $0.uuidString < $1.uuidString }))
         case "cancel_operation":
+            if state.worktrees.loading, let target = args["operation_id"]?.string.flatMap(UUID.init(uuidString:)), state.worktrees.loadID == target {
+                let effect = reduceWorktrees(state: &state, action: .cancelLoad)
+                finishManagedValue(state: &state, id: id, value: .object(["inspection_cancelled": .bool(true)]))
+                return effect
+            }
+            if state.worktrees.removing, let target = args["operation_id"]?.string.flatMap(UUID.init(uuidString:)), state.worktrees.activeRemoval?.id == target {
+                let effect = reduceWorktrees(state: &state, action: .cancelQueued)
+                finishManagedValue(state: &state, id: id, value: .object(["queued_removals_cancelled": .bool(true), "running_removal_continues": .bool(true)]))
+                return effect
+            }
             guard !state.isCleaning else { throw FeatureFailure(message: "Deletion has already started and cannot be cancelled.") }
             guard state.operationID == args["operation_id"]?.string.flatMap(UUID.init(uuidString:)) else {
                 throw FeatureFailure(message: "The operation changed. Read get_dashboard before cancelling.")
@@ -29,6 +39,8 @@ extension AppFeature {
                 effect = reduceManagement(state: &state, action: .rejectManagement(target))
             } else if state.pendingDeletionRequest?.id == target, target != nil {
                 effect = reduceCleanup(state: &state, action: .dismissConfirmation)
+            } else if state.worktrees.pending?.id == target, target != nil {
+                effect = reduceWorktrees(state: &state, action: .dismiss)
             } else { throw FeatureFailure(message: "The confirmation changed. Read get_dashboard again.") }
             finishManagedValue(state: &state, id: id, value: .object(["cancelled": .bool(true)]))
             return effect

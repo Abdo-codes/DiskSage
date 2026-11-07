@@ -5,7 +5,7 @@ extension AppFeature {
         switch name {
         case "get_dashboard":
             var result: [String: ToolValue] = ["status": .string(state.statusMessage), "busy": .bool(state.isBusy),
-                "operation": .string(String(describing: state.operation)), "free_space_bytes": .integer(Int(client.freeSpace())),
+                "operation": .string(String(describing: state.operation)), "free_space_bytes": .integer(Int(state.freeSpaceBytes)),
                 "selected_ids": try .encode(state.selection.sorted { $0.uuidString < $1.uuidString }),
                 "completed_count": .integer(state.cleanupCompletedCount), "total_count": .integer(state.cleanupTotalCount),
                 "current_item": .string(state.cleanupCurrentItem), "failed_count": .integer(state.cleanupFailures.count),
@@ -23,6 +23,10 @@ extension AppFeature {
                 "source_url": .string(AppInformation.repository.absoluteString),
                 "documentation_url": .string(AppInformation.documentation.absoluteString)])
             result["last_mcp_contact"] = try .encode(state.lastMCPContact)
+            result["automatic_monitoring"] = .bool(state.isMonitoring)
+            result["automatic_check_interval_seconds"] = .integer(Self.capacityCheckIntervalSeconds)
+            result["automatic_retry_after"] = try .encode(state.automaticRetryAfter)
+            result["storage_notifications"] = try .encode(state.storageNotifications)
             if let report = state.cleanupReport {
                 result["cleanup_report"] = .object(["estimated_removed_bytes": .integer(Int(report.estimatedRemovedBytes)),
                     "actual_recovered_bytes": .integer(Int(report.actualRecoveredBytes)),
@@ -38,6 +42,17 @@ extension AppFeature {
             if let pending = state.pendingManagementApproval {
                 result["confirmation"] = .object(["id": .string(pending.id.uuidString), "kind": .string("management"),
                     "title": .string(pending.title), "details": .string(pending.details)])
+            }
+            result["worktrees"] = .object(["loaded": .bool(state.worktrees.loaded), "loading": .bool(state.worktrees.loading),
+                "removing": .bool(state.worktrees.removing), "count": .integer(state.worktrees.reviewItems.count),
+                "results": try .encode(state.worktrees.results), "error": try .encode(state.worktrees.error)])
+            if let id = state.worktrees.loadID { result["operation_id"] = .string(id.uuidString); result["operation"] = .string("inspectingWorktrees") }
+            if let active = state.worktrees.activeRemoval {
+                result["operation_id"] = .string(active.id.uuidString); result["operation"] = .string("removingWorktrees")
+            }
+            if let pending = state.worktrees.pending {
+                result["confirmation"] = .object(["id": .string(pending.id.uuidString), "kind": .string("worktrees"),
+                    "count": .integer(pending.items.count), "message": .string("Human approval required in Git Worktrees.")])
             }
             return .object(result)
         case "list_candidates":
