@@ -111,7 +111,11 @@ struct WorktreesFeature {
                     state.loading = true; state.error = nil; state.toolPreviews = [:]
                     return .run { [client, root = state.requestedRepositoryRoot] send in
                         do {
-                            let configuration = try await Task.detached(priority: .utility) { try client.configuration() }.value
+                            let configuration: WorktreeConfiguration = try await withCheckedThrowingContinuation { continuation in
+                                DispatchQueue.global(qos: .utility).async {
+                                    continuation.resume(with: Result { try client.configuration() })
+                                }
+                            }
                             guard !Task.isCancelled else { return }
                             await send(.configurationLoaded(id, configuration))
                             let inventory = try await client.inventory(configuration, root)

@@ -313,7 +313,7 @@ See [SECURITY.md](SECURITY.md).
 ## Development
 
 ```sh
-swift test
+swift test --no-parallel
 swift run DiskSage
 ```
 
