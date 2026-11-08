@@ -124,4 +124,23 @@ struct WorktreeDisposableTests {
         #expect(WorktreeQuickCleanup.candidates([item]).isEmpty)
         #expect(WorktreePreview(items: [item]).requiresExtraAcknowledgement)
     }
+
+    @Test(arguments: ["--assume-unchanged", "--skip-worktree"])
+    func hiddenNestedEditsNeedDestructiveApproval(flag: String) throws {
+        let f = try WorktreeFixture(); defer { f.dispose() }
+        let folder = f.checkout.appending(path: ".build-dd")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let nested = folder.appending(path: "dependency")
+        _ = try f.git.run(folder.path, ["clone", "--no-hardlinks", "--", f.main.path, nested.path])
+        _ = try f.git.run(nested.path, ["update-index", flag, "file.txt"])
+        try "unsaved edit".write(to: nested.appending(path: "file.txt"), atomically: true, encoding: .utf8)
+
+        #expect(try f.git.text(nested.path, ["status", "--porcelain=v2", "-z"]).isEmpty)
+        let item = try f.inspect()
+        #expect(item.canRequestRemoval, "\(item.blockers)")
+        #expect(!item.isDisposable)
+        #expect(item.cleanupConcerns?.contains { $0.contains("Index has assume-unchanged or skip-worktree entries") } == true)
+        #expect(WorktreeQuickCleanup.candidates([item]).isEmpty)
+        #expect(WorktreePreview(items: [item]).requiresExtraAcknowledgement)
+    }
 }

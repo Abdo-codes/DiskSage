@@ -46,11 +46,7 @@ struct WorktreeInspector: Sendable {
             try WorktreeGitConfiguration.validateLocalFile(git, path: path, admin: admin)
             let metadata = try WorktreeMetadata.inspect(admin: admin, common: common)
             value.removalWarnings = metadata.warnings
-            let index = try git.run(path, ["ls-files", "-v", "--stage", "-z"]).text.components(separatedBy: "\0").filter { !$0.isEmpty }
-            if index.contains(where: { $0.first?.isLowercase == true || $0.first == "S" }) {
-                value.blockers.append("Index has assume-unchanged or skip-worktree entries.")
-            }
-            if index.contains(where: { $0.dropFirst(2).hasPrefix("160000 ") }) { value.blockers.append("Submodules are unsupported.") }
+            value.blockers.append(contentsOf: try git.indexBlockers(path))
             try WorktreeParsing.status(git.run(path, ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignored=matching", "--ignore-submodules=none"]).data, into: &value)
             if !value.staged.isEmpty || !value.modified.isEmpty || !value.conflicted.isEmpty || !value.untracked.isEmpty {
                 value.removalWarnings?.append("Uncommitted staged, modified, conflicted and untracked files will be permanently deleted. Untracked directory entries include all their contents.")

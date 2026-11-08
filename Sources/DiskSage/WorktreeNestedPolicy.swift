@@ -26,6 +26,9 @@ enum WorktreeNestedPolicy {
                         }
                     } else {
                         try git.rejectHelpers(path)
+                        if let blocker = try git.indexBlockers(path).first {
+                            throw FeatureFailure(message: "Cached dependency \(relative): \(blocker)")
+                        }
                         guard try git.text(path, ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignore-submodules=none"]).isEmpty else {
                             throw FeatureFailure(message: "Unsaved work inside cached dependency: \(relative).")
                         }

@@ -19,6 +19,17 @@ struct WorktreeGitProcess: Sendable {
     func rejectHelpers(_ path: String) throws {
         try WorktreeGitConfiguration.validate(self, path: path)
     }
+    func indexBlockers(_ path: String) throws -> [String] {
+        let entries = try run(path, ["ls-files", "-v", "--stage", "-z"]).text.split(separator: "\0")
+        var blockers: [String] = []
+        if entries.contains(where: { $0.first?.isLowercase == true || $0.first == "S" }) {
+            blockers.append("Index has assume-unchanged or skip-worktree entries.")
+        }
+        if entries.contains(where: { $0.dropFirst(2).hasPrefix("160000 ") }) {
+            blockers.append("Submodules are unsupported.")
+        }
+        return blockers
+    }
     func execute(_ executable: String, _ args: [String], allowTermination: Bool = true) throws -> Output {
         let directory = FileManager.default.temporaryDirectory.appending(path: "disksage-git-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
