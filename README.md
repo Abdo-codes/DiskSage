@@ -165,9 +165,9 @@ are hidden by default; **Show primary checkouts** reveals those protected rows.
 **Clean Unchanged Worktrees…** gathers disposable checkouts into one review.
 One **Delete Worktrees** click removes the selected folders while keeping their
 branches and committed work. There is no typed `DELETE` phrase or checklist for
-known generated caches and anchored Claude markers. Clean cached dependencies
-must have no unsaved changes or locally unique commits; dependency mirrors must
-be recognized generated caches.
+known generated caches and anchored Claude markers. Cached dependencies must be
+clean. Their local refs and recovery history must be backed by cached remote refs,
+including for bare dependency mirrors.
 
 Unsaved source, notes, secrets, draft messages and unretained recovery history
 stay out of quick cleanup. Manual removal of that data shows one additional

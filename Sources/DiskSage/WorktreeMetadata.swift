@@ -4,6 +4,36 @@ import Foundation
 
 /// Pins the private data that Git removes with a linked checkout. Contents stay out of UI/MCP.
 enum WorktreeMetadata {
+    static func recoveryTips(admin: String) throws -> Set<String> {
+        let names = ["ORIG_HEAD", "REBASE_HEAD", "FETCH_HEAD", "MERGE_HEAD", "MERGE_AUTOSTASH",
+                     "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_HEAD"]
+        var tips = Set<String>()
+        for name in names {
+            let url = URL(fileURLWithPath: admin + "/" + name)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw FeatureFailure(message: "Git recovery metadata could not be verified: \(name).")
+            }
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            let data = try file.read(upToCount: 128_001) ?? Data()
+            guard data.count <= 128_000, let contents = String(data: data, encoding: .utf8) else {
+                throw FeatureFailure(message: "Git recovery metadata exceeded its review limit: \(name).")
+            }
+            for line in contents.split(whereSeparator: \.isNewline) {
+                guard let tip = line.split(whereSeparator: \.isWhitespace).first else { continue }
+                guard [40, 64].contains(tip.utf8.count),
+                      tip.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }) else {
+                    throw FeatureFailure(message: "Malformed Git recovery object ID: \(name).")
+                }
+                tips.insert(String(tip))
+                guard tips.count <= 200 else { throw FeatureFailure(message: "Too many Git recovery tips to verify.") }
+            }
+        }
+        return tips
+    }
+
     static func inspect(admin: String, common: String) throws -> (warnings: [String], digest: String, disposable: Bool, tips: [String]) {
         let manager = FileManager.default
         let blocked = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer", "AUTO_MERGE"]

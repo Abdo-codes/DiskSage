@@ -29,12 +29,21 @@ enum WorktreeNestedPolicy {
                         guard try git.text(path, ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignore-submodules=none"]).isEmpty else {
                             throw FeatureFailure(message: "Unsaved work inside cached dependency: \(relative).")
                         }
-                        guard try git.text(path, ["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"]).isEmpty else {
-                            throw FeatureFailure(message: "Locally unique commits inside cached dependency: \(relative).")
-                        }
                         guard try WorktreeIgnoredFiles.paths(git: git, checkout: path).allSatisfy(WorktreeValuePolicy.isGenerated) else {
                             throw FeatureFailure(message: "Local ignored files inside cached dependency: \(relative).")
                         }
+                    }
+                    try WorktreeObjectPolicy.validateShared(common: common)
+                    let admin = try git.text(path, ["rev-parse", "--absolute-git-dir"])
+                    _ = try WorktreePathGuard.identity(admin)
+                    guard WorktreePathGuard.contains(checkout, admin),
+                          try git.text(path, ["rev-parse", "--is-shallow-repository"]) == "false" else {
+                        throw FeatureFailure(message: "Nested Git history could not be verified: \(relative).")
+                    }
+                    let tips = try WorktreeMetadata.recoveryTips(admin: admin)
+                    let history = ["rev-list", "--max-count=1", "--all", "--reflog"] + tips.sorted() + ["--not", "--remotes"]
+                    guard try git.text(path, history).isEmpty else {
+                        throw FeatureFailure(message: "Locally unique commits or recovery history inside cached dependency: \(relative).")
                     }
                 } catch { concerns.append(error.localizedDescription) }
             }

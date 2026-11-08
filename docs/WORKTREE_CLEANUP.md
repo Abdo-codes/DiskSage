@@ -313,10 +313,10 @@ Use disposable native Git repositories plus TCA tests; never real user worktrees
 
 Quick cleanup excludes meaningful unsaved files, secrets and unretained commits.
 Generated build/cache paths and a valid, retained `CLAUDE_BASE` marker are eligible.
-Nested dependencies must be isolated and clean, with HEAD reachable from cached
-remote refs; bare generated dependency mirrors are eligible. Local edits, ignored
-settings or unique dependency commits require review. Evidence and classification
-are pinned together and rechecked before deletion. The selection is bounded to
+Nested dependencies must be isolated and clean. Local refs, reflogs and recovery
+tips must all be backed by cached remote refs, including in bare dependency mirrors.
+Local edits, ignored settings or unique dependency commits require review. Evidence
+and classification are pinned together and rechecked before deletion. The selection is bounded to
 300 worktrees and 16 MB of inspection data; previews summarize large selections
 while the native sheet keeps the complete list. Reference verification is batched
 after each removal.

@@ -108,10 +108,7 @@ struct WorktreeInspector: Sendable {
         var tips = Set(try git.text(path, ["reflog", "show", "--format=%H", "HEAD"]).split(separator: "\n").map(String.init))
         tips.formUnion(extraTips)
         let admin = try git.text(path, ["rev-parse", "--absolute-git-dir"])
-        for name in ["ORIG_HEAD", "REBASE_HEAD", "FETCH_HEAD"] where FileManager.default.fileExists(atPath: admin + "/" + name) {
-            let contents = try String(contentsOfFile: admin + "/" + name, encoding: .utf8)
-            for line in contents.split(separator: "\n") { if let tip = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first { tips.insert(String(tip)) } }
-        }
+        tips.formUnion(try WorktreeMetadata.recoveryTips(admin: admin))
         guard tips.count <= 200 else { throw FeatureFailure(message: "Recovery history is too large to verify; preserve or review externally.") }
         guard tips.allSatisfy({ $0.utf8.count == value.worktree.head.utf8.count && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) } }) else {
             throw FeatureFailure(message: "Malformed recovery object ID; preservation could not be verified.")

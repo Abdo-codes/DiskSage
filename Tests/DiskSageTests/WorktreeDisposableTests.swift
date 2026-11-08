@@ -73,13 +73,17 @@ struct WorktreeDisposableTests {
         #expect(FileManager.default.fileExists(atPath: f.checkout.path))
     }
 
-    @Test(arguments: ["clean", "dirty", "local-commit", "mirror", "bare"])
+    @Test(arguments: ["clean", "dirty", "local-commit", "mirror", "tracked-mirror", "bare"])
     func nestedCachesMustBeReproducibleToUseTheSimpleFlow(kind: String) throws {
         let f = try WorktreeFixture(); defer { f.dispose() }
         let folder = f.checkout.appending(path: ".build-dd/SourcePackages")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let nested = folder.appending(path: "dependency")
-        _ = try f.git.run(folder.path, ["clone"] + (kind == "mirror" ? ["--mirror"] : kind == "bare" ? ["--bare"] : []) + ["--no-hardlinks", "--", f.main.path, nested.path])
+        let mirror = kind == "mirror" || kind == "tracked-mirror"
+        _ = try f.git.run(folder.path, ["clone"] + (mirror ? ["--mirror"] : kind == "bare" ? ["--bare"] : []) + ["--no-hardlinks", "--", f.main.path, nested.path])
+        if kind == "tracked-mirror" {
+            _ = try f.git.run(nested.path, ["update-ref", "refs/remotes/origin/main", "refs/heads/main"])
+        }
         if kind == "dirty" { try "edit".write(to: nested.appending(path: "file.txt"), atomically: true, encoding: .utf8) }
         if kind == "local-commit" {
             _ = try f.git.run(nested.path, ["config", "user.name", "Fixture"])
@@ -89,6 +93,35 @@ struct WorktreeDisposableTests {
         }
         let item = try f.inspect()
         #expect(item.canRequestRemoval, "\(item.blockers)")
-        #expect(item.isDisposable == (kind == "clean" || kind == "mirror"), "\(item.cleanupConcerns ?? [])")
+        #expect(item.isDisposable == (kind == "clean" || kind == "tracked-mirror"), "\(item.cleanupConcerns ?? [])")
+    }
+
+    @Test(arguments: ["branch", "tag", "reflog", "recovery-head"])
+    func inactiveNestedCommitsNeedDestructiveApproval(kind: String) throws {
+        let f = try WorktreeFixture(); defer { f.dispose() }
+        let folder = f.checkout.appending(path: ".build-dd")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let nested = folder.appending(path: "dependency").path
+        _ = try f.git.run(folder.path, ["clone", "--no-hardlinks", "--", f.main.path, nested])
+        _ = try f.git.run(nested, ["config", "user.name", "Fixture"])
+        _ = try f.git.run(nested, ["config", "user.email", "fixture@example.invalid"])
+        _ = try f.git.run(nested, ["switch", "--detach"])
+        _ = try f.git.run(nested, ["commit", "--allow-empty", "-m", "unique nested work"])
+        let unique = try f.git.text(nested, ["rev-parse", "HEAD"])
+        if kind == "branch" { _ = try f.git.run(nested, ["branch", "local-work", unique]) }
+        if kind == "tag" { _ = try f.git.run(nested, ["tag", "local-work", unique]) }
+        _ = try f.git.run(nested, ["switch", "main"])
+        if kind != "reflog" {
+            _ = try f.git.run(nested, ["reflog", "expire", "--expire=all", "--expire-unreachable=all", "--all"])
+        }
+        if kind == "recovery-head" { _ = try f.git.run(nested, ["update-ref", "ORIG_HEAD", unique]) }
+
+        #expect(try f.git.text(nested, ["rev-list", "HEAD", "--not", "--remotes"]).isEmpty)
+        let item = try f.inspect()
+        #expect(item.canRequestRemoval, "\(item.blockers)")
+        #expect(!item.isDisposable)
+        #expect(item.cleanupConcerns?.contains { $0.contains("Locally unique commits or recovery history") } == true)
+        #expect(WorktreeQuickCleanup.candidates([item]).isEmpty)
+        #expect(WorktreePreview(items: [item]).requiresExtraAcknowledgement)
     }
 }
