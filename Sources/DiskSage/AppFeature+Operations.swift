@@ -94,7 +94,6 @@ extension AppFeature {
 
     func finishAutomaticScan(state: inout State) -> EffectOf<Self> {
         let preferences = client.preferences()
-        state.freeSpaceBytes = client.freeSpace()
         guard preferences.automaticEnabled else {
             state.statusMessage = "Automatic cleanup skipped: disabled in Settings."
             return .none
@@ -112,6 +111,7 @@ extension AppFeature {
 
     func beginScan(state: inout State, purpose: ScanPurpose, reservedID: UUID? = nil) -> EffectOf<Self> {
         let id = reservedID ?? uuid()
+        if purpose == .automatic { state.automaticRetryAfter = now.addingTimeInterval(Self.automaticRetryInterval) }
         state.activityRevision += 1
         state.operationID = id
         state.operation = purpose == .automatic ? .automaticScan : .scanning
@@ -124,7 +124,9 @@ extension AppFeature {
             guard !Task.isCancelled else { return }
             let dashboard = await client.dashboard()
             guard !Task.isCancelled else { return }
-            await send(.scanFinished(id, purpose, results, client.freeSpace(), dashboard))
+            let available = await client.capacity()
+            guard !Task.isCancelled else { return }
+            await send(.scanFinished(id, purpose, results, available, dashboard))
         }.cancellable(id: CancelID.scan)
     }
 }

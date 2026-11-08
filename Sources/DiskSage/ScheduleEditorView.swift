@@ -69,7 +69,7 @@ struct ScheduleEditorView: View {
 
     private func useFolder(_ url: URL) {
         do {
-            let identity = try ScheduledFolderPolicy.identity(of: url)
+            let identity = try ScheduledFolderPolicy.identity(of: url, scope: value.scope)
             value.folder = CleanupPath.fileURL(url)
             value.folderIdentity = identity
             hasFolder = true

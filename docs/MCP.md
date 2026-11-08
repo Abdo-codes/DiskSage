@@ -24,6 +24,9 @@ Check `isError` before parsing: connection errors can contain only text.
 | --- | --- |
 | Disk dashboard, progress, errors, pending confirmations | `get_status`, `get_dashboard` |
 | Fresh scan | `scan` |
+| Git worktree inventory and file/commit details | `refresh_worktrees`, `list_worktrees`, `inspect_worktree` |
+| Preview/request checkout removal (native confirmation always) | `preview_worktree_removal`, `preview_unused_worktrees`, `remove_worktrees` |
+| Keep/unprotect a worktree (unprotect needs native approval) | `set_worktree_protected` |
 | Search/filter candidates, inspect risk and deletion scope | `list_candidates` |
 | Replace/add/remove selection, clear selection | `set_selection` |
 | Reveal selected candidate in Finder | `reveal_candidate` |
@@ -43,6 +46,10 @@ The API returns setup text instead of copying to the clipboard. Launch-at-login
 registration can still require approval in macOS System Settings.
 `get_dashboard` also exposes app version/project metadata in `app` and the most
 recent client request timestamp in `last_mcp_contact` (null before any request).
+It also exposes `automatic_monitoring`, `automatic_check_interval_seconds`, and
+`automatic_retry_after` for diagnosing low-space monitoring and its scan cooldown.
+`storage_notifications` reports registered macOS low-space notification names and
+registration failures; the one-minute fallback remains active independently.
 
 ## Requests, results, and retries
 
@@ -229,3 +236,62 @@ quota; Ollama model listing may fail independently of the app.
 Unknown keys are rejected. Settings are applied only after a person approves
 those exact changes in the app. This API never returns credentials or performs
 provider sign-in; account authentication remains in the provider's own UI/CLI.
+
+## Git worktrees
+
+First approve repository/project folders in **Cleanup Review → Git Worktrees**.
+This authorizes local inspection only. No background fetch, pruning or branch
+changes occur. Choose an explicit full integration ref, such as `refs/heads/main`,
+in that review; cached remote refs have unknown freshness.
+
+1. Call `refresh_worktrees` with a fresh UUID and poll `get_job`. Optionally pass
+   `repository_root` to inspect one existing repository inside approved folders.
+   This does not add folder permissions; omitting it scans all approved folders.
+2. Page through `list_worktrees`. `inspect_worktree` accepts `worktree_id`, `offset`
+   and `limit`; page its `details` to see changed/ignored paths, commits and refs.
+3. Call `preview_worktree_removal` with eligible `worktree_ids` (at most 300), or
+   `preview_unused_worktrees` to prepare the same bounded batch as the UI shortcut.
+4. Pass its opaque `snapshot_token` and a new UUID to `remove_worktrees`.
+5. A person must review and confirm exact paths in the app. Automatic low-risk
+   permission cannot approve worktree removal. Poll the job for each result.
+
+`set_worktree_protected` accepts `worktree_id`, `protected` and `request_id`.
+Protecting takes effect immediately; removing protection needs native approval.
+Use `open_window` with `window: "worktrees"` to open the review. Human confirmation
+cannot be sent through MCP; `dismiss_confirmation` can decline it. While a batch
+runs, `cancel_operation` with its dashboard `operation_id` cancels remaining queued
+rows; an already running Git removal finishes and is reconciled.
+
+`list_worktrees` distinguishes `can_remove` (ordinary review) from
+`can_request_removal` (may require explicit discard approval). Inspect
+`removal_warnings` and `discard_approval_required`. Summaries include the first
+three warnings plus `removal_warning_count` and `removal_warnings_truncated`; page
+`inspect_worktree` for every `removal_warning`. The native sheet retains the full
+risk list. To request destructive review,
+pass `allow_discard: true` to `preview_worktree_removal`. This only creates a
+preview; it never grants approval. `preview_unused_worktrees` selects only `disposable: true` rows: saved source,
+retained commits and recognized generated data. Anchored Claude markers and clean
+dependency caches do not add extra confirmations. Local notes, secrets and unique
+commits do. The native view lists the full selected scope; large preview replies
+include a bounded sample plus `checkouts_total` and `checkouts_truncated`.
+
+Only native `git worktree remove` is used. The app rechecks identity, files, refs,
+private metadata, recovery history, locks and activity. Ignored files require their
+own approval. Changes, private Git metadata, unretained recovery commits and nested
+repositories outside known disposable caches require one native acknowledgement.
+Disposable checkouts use a single Delete confirmation, without checklists or a
+typed phrase. Native approval alone permits Git to use one `--force` flag. Nested repository branches can be lost; only
+top-level branches/shared Git data are retained. Neither MCP arguments nor automatic
+policy can grant these approvals. Changed evidence invalidates them. Hard blockers
+(main/protected/locked/active checkouts, unsafe paths and incomplete inspection)
+cannot be overridden. Nested repositories with outside shared data or additional
+checkouts remain blocked. Git refusal never triggers a recursive fallback or second force.
+Checkout removal keeps branches and shared Git data; local refs are not a remote
+backup. Estimated checkout bytes and observed free-space change are separate.
+
+Acceptance and results are private, durable records (last 200 MCP requests).
+After a restart an incomplete request reports unconfirmed completion and cannot
+resume automatically; refresh evidence and inspect History before a new UUID.
+Preview tokens are session-only and invalidated by refresh. Generic cache cleanup,
+advisor requests and folder schedules never remove worktree roots. Existing
+unsafe schedules are paused with a reason and require a new folder choice.

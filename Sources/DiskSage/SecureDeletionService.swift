@@ -42,9 +42,12 @@ struct CleanupService: Sendable {
     init(logger: CleanupLogger = .shared, maximumWorkers: Int = 4,
          remove: @escaping Remove = { candidate, entryRemoved in
              try SafetyPolicy().validate(candidate)
-             if candidate.deletionMode == .simulatorDevices {
+             if candidate.deletionMode == .generatedFiles {
+                 try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
+             } else if candidate.deletionMode == .simulatorDevices {
                  try SimulatorCleanup.deleteDevices()
              } else {
+                 try CleanupActivity.capture().requireIdle(candidate.url)
                  try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              }
          }, writeEvent: WriteEvent? = nil) {
@@ -121,7 +124,7 @@ enum SecureFileDeleter {
         }
     }
 
-    private static func openDirectoryChain(_ components: [String]) throws -> Int32 {
+    static func openDirectoryChain(_ components: [String]) throws -> Int32 {
         var currentFD = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard currentFD >= 0 else {
             throw SecureDeletionError.systemCall("Opening filesystem root", errno)

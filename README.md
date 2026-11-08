@@ -27,6 +27,8 @@ scanner and deletion policy remain in control of filesystem access.
   filters. Cancel scanning or advice requests without losing the current list.
 - Progress for up to four independent cleanup targets, immediate removal of
   successful rows, and retained failures with explanations.
+- A Git Worktrees review with changed/ignored files, commit preservation checks,
+  explicit protection, and human-confirmed checkout removal that keeps branches.
 - Local cleanup history and rotating logs recording what was attempted and when.
 - Optional advisors and agent tools, with separate consent and cleanup controls.
 
@@ -72,20 +74,29 @@ is not part of the current build pipeline.
 Each scan shows up to **100 of the largest validated candidates**. Inaccessible,
 empty, symlinked, disallowed, or running-executable targets are excluded.
 
-| Location | Classification | Scope |
-| --- | --- | --- |
-| Xcode DerivedData | Low risk | Generated contents; parent folder remains |
-| Project `.build` folders under `~/Developer` | Low risk | Entire generated folder |
-| Generic project `build` folders under `~/Developer` | Needs review | Entire folder, only after manual selection |
-| npm package cache and per-user Bazel output cache | Low risk | Cache folder |
-| Child folders of `~/Library/Caches` and `~/.cache` | Low risk, with caveat below | Selected cache folder |
-| Xcode Archives | Sensitive | Archives and dSYMs inside the archive folder |
-| Simulator devices | Sensitive | All simulator devices, including installed apps and data |
+| Location | Files offered |
+| --- | --- |
+| Xcode DerivedData, project `.build`, compiler caches and Bazel output | Recognized compiled objects, modules and indexes |
+| Projects under `~/Developer`, `~/Documents/Codex`, Codex visualizations and temporary builds | The same generated-file rules, discovered recursively |
+| npm and Firebase CLI caches | Downloaded content payloads |
+| Go build cache | Recognizable compiled payloads; test output and action metadata stay |
+| Go module, SwiftPM binary and Bazel repository downloads | Recognized download files; Bazel archives require matching SHA-256 |
+| Known Electron apps | HTTP, code and GPU cache leaves only |
 
-**Low risk is a classification, not a guarantee that every tool uses its cache
-correctly.** Some tools keep non-regenerable state in cache directories. Review
-those candidates before allowing unattended cleanup. Archives, simulator devices,
-and generic `build` folders are excluded from low-disk and agent cleanup.
+The default scan preserves source snapshots, checkouts, prebuilt tool bundles,
+installed dependencies, test evidence, conversation history, simulator data,
+session disks and iOS device-support symbols. It does not offer arbitrary app
+cache folders, archives, installed runtimes or tool versions for removal.
+
+Files must be at least one hour old, including creation and metadata-change time.
+Open files and active build/cache folders are skipped. An unavailable activity
+check blocks cleanup. Before deleting, DiskSage verifies the selected file
+manifest again, then checks each file identity and periodically rechecks activity.
+Changed targets require a fresh scan. Symlinks are never followed. Owned read-only
+output directories are temporarily made owner-writable and their mode restored;
+flags, ACLs and other users' permissions are not overridden. Partial failures
+report only the allocated bytes actually unlinked. Space estimates can differ
+from reclaimed disk space because of APFS sharing and concurrent activity.
 
 ## Cleanup controls
 
@@ -93,12 +104,19 @@ and generic `build` folders are excluded from low-disk and agent cleanup.
 | --- | --- | --- |
 | Manual selection | Select items in Review, then **Delete Selected** | Always |
 | Clean now | **Clean Low-Risk Items…** in the dashboard or menus | Always; scans first if needed |
-| Low-disk automation | Startup and hourly capacity checks | No additional prompt for low-risk targets |
+| Low-disk automation | Startup, every minute while running, and after wake/settings changes | No additional prompt for low-risk targets |
 | Agent-requested cleanup | MCP tool or an explicitly enabled built-in advisor | Depends on **MCP → Cleanup requests** |
 | Scheduled folders | Daily, weekly, or once at a chosen time | Custom folder contents require explicit authorization when configured |
 
 Configure startup, low-disk automation, and the threshold in
-**Settings → General & Safety**. The default threshold is **15 GiB**. Automatic
+**Settings → General & Safety**. Low disk space is checked every minute while the
+app runs, and immediately after macOS low-space notifications, wake, or
+automatic-cleanup settings changes. System notifications are advisory; the app
+always checks actual capacity against your threshold before acting. If
+space stays low, automatic scans retry at most every 15 minutes; recovering above
+the threshold rearms cleanup for the next drop. Manual cleanup remains available.
+
+The default threshold is **15 GiB**. Automatic
 cleanup runs a fresh scan and rechecks enablement, threshold, and available space
 before deleting. Its preflight scan can be cancelled.
 
@@ -117,8 +135,9 @@ because macOS must unlink their entries individually.
 Open **Settings → Schedules → Add schedule**. Choose a generated build/cache
 folder and a daily, weekly, or one-time cleanup time. Low-risk mode is the default.
 To clean another folder, choose **All folder contents** and explicitly authorize
-permanent deletion. Each run removes the folder's contents while keeping the
-folder itself. Symlinks are not followed, and replaced folders need new authorization.
+permanent deletion. Low-risk schedules use the same generated-file policy as
+manual cleanup. Explicit all-contents schedules remove the authorized contents
+while keeping the folder. Symlinks are not followed; replaced folders require new authorization.
 
 Schedules have independent enable switches, next-run times, and last results;
 completed deletions appear as **Scheduled** in History and the local logs. They
@@ -134,6 +153,27 @@ cannot repeat it. No schedules are created or enabled by default.
 | Command-1 | Open Review |
 | Command-comma | Open Settings |
 | Command-W | Close the current window |
+
+### Git worktree review
+
+Open **Cleanup Review → Git Worktrees**, add a repository or projects folder,
+and refresh local status. Review file changes, ignored output, retained refs and
+cached remote evidence before selecting checkouts. Set an explicit integration
+reference if you want an ancestry check. Nothing is preselected. Primary checkouts
+are hidden by default; **Show primary checkouts** reveals those protected rows.
+
+**Clean Unchanged Worktrees…** gathers disposable checkouts into one review.
+One **Delete Worktrees** click removes the selected folders while keeping their
+branches and committed work. There is no typed `DELETE` phrase or checklist for
+known generated caches and anchored Claude markers. Cached dependencies must be
+clean. Their local refs and recovery history must be backed by cached remote refs,
+including for bare dependency mirrors.
+
+Unsaved source, notes, secrets, draft messages and unretained recovery history
+stay out of quick cleanup. Manual removal of that data shows one additional
+acknowledgement. Main/protected/locked/active checkouts and incomplete evidence
+remain blocked. Worktrees stay excluded from automatic and scheduled cleanup.
+See the [worktree contract](docs/WORKTREE_CLEANUP.md) and [MCP tools](docs/MCP.md#git-worktrees).
 
 ## Agent choices
 
@@ -273,7 +313,7 @@ See [SECURITY.md](SECURITY.md).
 ## Development
 
 ```sh
-swift test
+swift test --no-parallel
 swift run DiskSage
 ```
 

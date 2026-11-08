@@ -40,7 +40,6 @@ struct ReviewFilterBar: View {
     @Binding var risk: ReviewRiskFilter
     let visibleCount: Int
     let totalCount: Int
-    let busy: Bool
     let hasSelection: Bool
     let canSelectLowRisk: Bool
     let selectLowRisk: () -> Void
@@ -56,9 +55,9 @@ struct ReviewFilterBar: View {
             }
             .labelsHidden().frame(width: 125).accessibilityLabel("Filter by risk")
             Text("\(visibleCount) of \(totalCount)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            Button("Select Visible Low Risk", action: selectLowRisk).disabled(busy || !canSelectLowRisk)
+            Button("Select Visible Low Risk", action: selectLowRisk).disabled(!canSelectLowRisk)
                 .help("Select only low-risk items in the current results. Hidden selections stay selected.")
-            Button("Clear All", action: clearSelection).disabled(busy || !hasSelection)
+            Button("Clear All", action: clearSelection).disabled(!hasSelection)
         }
         .controlSize(.small)
         .padding(.horizontal, 18).padding(.vertical, 10)

@@ -26,6 +26,7 @@ struct AutomaticCleanupPreflightTests {
         }
         await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), true, nil)) {
             $0.automaticCheckID = nil; $0.activityRevision = 1
+            $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
         switch change {
@@ -53,6 +54,7 @@ struct AutomaticCleanupPreflightTests {
         }
         let task = await store.send(.scanRequested(.automatic)) {
             $0.activityRevision = 1; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(0)
+            $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
         #expect(store.state.isScanning && !store.state.isCleaning)
@@ -75,6 +77,7 @@ struct AutomaticCleanupPreflightTests {
         }
         await store.send(.scanRequested(.automatic)) {
             $0.activityRevision = 1; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(0)
+            $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
         await store.receive(.scanFinished(FeatureTestSupport.id(0), .automatic, candidates, 100, DashboardSnapshot())) {

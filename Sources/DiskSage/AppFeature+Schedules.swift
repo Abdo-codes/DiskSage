@@ -8,6 +8,17 @@ extension AppFeature {
             guard !state.isScheduling else { return .none }
             do {
                 state.schedules = try schedules.load()
+                var paused = false
+                for index in state.schedules.indices where state.schedules[index].isEnabled {
+                    do { try schedules.validate(state.schedules[index]) }
+                    catch {
+                        state.schedules[index].isEnabled = false
+                        state.schedules[index].revision &+= 1
+                        state.schedules[index].lastResult = "Paused: \(error.localizedDescription) Choose the folder again."
+                        paused = true
+                    }
+                }
+                if paused { try schedules.save(state.schedules) }
                 state.schedulesLoaded = true
                 state.scheduleError = nil
                 state.schedulingBlocked = false
@@ -120,12 +131,12 @@ extension AppFeature {
             case let .success(targets):
                 guard !targets.isEmpty else {
                     state.operation = .idle; state.operationID = nil
-                    finishScheduleAttempt(state: &state, message: "Folder is empty; nothing to clean.")
+                    finishScheduleAttempt(state: &state, message: "No eligible inactive files to clean.")
                     return .none
                 }
                 // Even injected scan results cannot expand this schedule's folder authorization.
                 guard targets.allSatisfy({ $0.url.standardizedFileURL.path == current.folder.standardizedFileURL.path &&
-                    $0.identity == current.folderIdentity && $0.deletionMode == .contents &&
+                    $0.identity == current.folderIdentity && $0.deletionMode == (current.scope == .lowRisk ? .generatedFiles : .contents) &&
                     (current.scope != .lowRisk || $0.risk == .low) }) else {
                     state.operation = .idle; state.operationID = nil
                     finishScheduleAttempt(state: &state, message: "Cleanup refused: scan returned an unauthorized target.")

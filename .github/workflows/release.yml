@@ -19,7 +19,7 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Test
-        run: swift test
+        run: swift test --no-parallel
       - name: Build app bundle
         run: ./Scripts/build-app.sh release
       - name: Package and checksum

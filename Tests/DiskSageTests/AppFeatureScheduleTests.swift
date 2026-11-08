@@ -18,7 +18,7 @@ struct AppFeatureScheduleTests {
     }
     private func target(_ value: CleanupSchedule) -> CleanupCandidate {
         CleanupCandidate(url: value.folder, name: "cache", category: .cache, size: 4096,
-            risk: .low, reason: "Fixture", identity: value.folderIdentity, deletionMode: .contents)
+            risk: .low, reason: "Fixture", identity: value.folderIdentity, deletionMode: value.scope == .lowRisk ? .generatedFiles : .contents)
     }
     private func claim(_ state: inout AppFeature.State, _ value: CleanupSchedule) {
         var claimed = value
@@ -211,7 +211,7 @@ struct AppFeatureScheduleTests {
         await store.send(.scheduleTick) { claim(&$0, value); $0.scheduleError = nil }
         await store.receive(.scheduledScanFinished(FeatureTestSupport.id(0), .success([]))) {
             $0.operation = .idle; $0.operationID = nil; $0.activeSchedule = nil
-            $0.statusMessage = "Folder is empty; nothing to clean."
+            $0.statusMessage = "No eligible inactive files to clean."
             $0.schedules[0].lastResult = $0.statusMessage
         }
         await store.send(.scheduleTick)

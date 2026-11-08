@@ -4,14 +4,22 @@ import Foundation
 extension AppFeature {
     func handleAgentRequest(state: inout State, request: AgentToolRequest) -> EffectOf<Self> {
         switch request.action {
-        case .manage: return handleManagement(state: &state, request: request)
+        case .manage:
+            if MCPWorktreeSchema.contains(request.tool) { return handleWorktreeTool(state: &state, request: request) }
+            return handleManagement(state: &state, request: request)
         case .status:
             state.agentToolReply = AgentToolReply(status: AgentToolStatus(busy: state.isBusy,
-                awaitingConfirmation: state.pendingDeletionRequest != nil, freeSpaceBytes: client.freeSpace(),
+                awaitingConfirmation: state.pendingDeletionRequest != nil || state.worktrees.pending != nil, freeSpaceBytes: state.freeSpaceBytes,
                 candidateCount: state.candidates.count, lowRiskCount: state.lowRiskCandidates.count,
                 lowRiskBytes: state.lowRiskCandidates.reduce(0) { $0 + $1.size }, lastScanDate: state.lastScanDate,
                 cleanupPolicy: client.preferences().agentPolicy.rawValue))
         case .job:
+            if let id = request.requestID, state.agentToolJobs[id] == nil, let receipt = try? worktreeClient.receipt(id) {
+                let phase = receipt.result.object?["phase"]?.string.flatMap(AgentToolJob.Phase.init(rawValue:)) ?? .warnings
+                state.agentToolReply = AgentToolReply(job: AgentToolJob(id: id, action: .manage, startedAt: receipt.timestamp,
+                    phase: phase, completedAt: receipt.timestamp, result: receipt.result))
+                return .none
+            }
             if let id = request.requestID, state.agentToolJobs[id] == nil,
                let receipt = try? management.receipt(id) {
                 state.agentToolReply = AgentToolReply(job: AgentToolJob(id: id, action: .manage,
@@ -22,7 +30,7 @@ extension AppFeature {
                 state.agentToolReply = AgentToolReply(error: "Unknown job. Jobs are retained for this app session only; do not assume cleanup ran.")
                 return .none
             }
-            if job.phase == .cleaning {
+            if job.phase == .cleaning, !MCPWorktreeSchema.contains(state.managedRequests[id]?.tool) {
                 job.completedCount = state.cleanupCompletedCount
                 job.removedEntryCount = state.cleanupRemovedEntryCount
             }
@@ -30,6 +38,9 @@ extension AppFeature {
         case .scan, .cleanLowRisk:
             guard let id = request.requestID else {
                 state.agentToolReply = AgentToolReply(error: "A UUID request_id is required."); return .none
+            }
+            if (try? worktreeClient.receipt(id)) != nil {
+                state.agentToolReply = AgentToolReply(error: "request_id belongs to a worktree request."); return .none
             }
             if let existing = state.agentToolJobs[id] {
                 state.agentToolReply = existing.action == request.action ? AgentToolReply(job: existing)

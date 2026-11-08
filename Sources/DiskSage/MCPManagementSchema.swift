@@ -41,7 +41,7 @@ enum MCPManagementSchema {
             properties: ["candidate_ids": ids, "mode": choice(["replace", "add", "remove"])], required: ["candidate_ids", "mode"], requestID: true),
          Definition(name: "delete_candidates", description: "Request deletion of scanned candidate IDs, including sensitive items. ALWAYS requires a person to confirm the exact paths in DiskSage. Poll get_job; never claim deletion from acceptance.",
             properties: ["candidate_ids": ids], required: ["candidate_ids"], destructive: true, requestID: true),
-         Definition(name: "cancel_operation", description: "Cancel the matching scan or advisor request. Deletion cannot be cancelled once started. Read operation_id from get_dashboard.",
+         Definition(name: "cancel_operation", description: "Cancel the matching scan/advisor or queued worktree removals. A running deletion always finishes. Read operation_id from get_dashboard.",
             properties: ["operation_id": uuid], required: ["operation_id"], requestID: true),
          Definition(name: "dismiss_confirmation", description: "Cancel a pending deletion or management approval. Cannot approve any request. Read confirmation_id from get_dashboard.",
             properties: ["confirmation_id": uuid], required: ["confirmation_id"], requestID: true),
@@ -70,10 +70,10 @@ enum MCPManagementSchema {
             properties: ["limit": integer(1, 200), "offset": integer(0, Int.max), "run_id": uuid], readOnly: true, requestID: true),
          Definition(name: "get_mcp_setup", description: "Read the same Claude Code and Codex connection commands shown in Settings.", readOnly: true),
          Definition(name: "open_window", description: "Open/focus a native DiskSage screen or its log folder.",
-            properties: ["window": choice(["dashboard", "review", "settings", "schedules", "history", "logs", "agent", "tools", "mcp", "general", "about", "onboarding"])], required: ["window"], requestID: true),
+            properties: ["window": choice(["dashboard", "review", "worktrees", "settings", "schedules", "history", "logs", "agent", "tools", "mcp", "general", "about", "onboarding"])], required: ["window"], requestID: true),
          Definition(name: "reveal_candidate", description: "Reveal one current scanned candidate in Finder; arbitrary paths are not accepted.",
             properties: ["candidate_id": uuid], required: ["candidate_id"], requestID: true),
-         Definition(name: "quit_app", description: "Request DiskSage to quit. Refused while deletion is running. MCP becomes unavailable until the app is reopened; stopping the app stops schedule checks.", requestID: true)]
+         Definition(name: "quit_app", description: "Request DiskSage to quit. Refused while deletion is running. MCP becomes unavailable until the app is reopened; stopping the app stops schedule checks.", requestID: true)] + MCPWorktreeSchema.definitions
     }
 
     static func command(name: String, arguments: [String: Any]) throws -> AgentToolRequest? {

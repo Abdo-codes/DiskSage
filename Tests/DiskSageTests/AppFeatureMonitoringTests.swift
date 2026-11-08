@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct AppFeatureMonitoringTests {
-    @Test func hourlyChecksUseTheClockAndStopWithoutLeakingEffects() async {
+    @Test func minuteChecksUseTheClockAndStopWithoutLeakingEffects() async {
         let clock = TestClock()
         let checks = LockIsolated<[CleanupLogEvent]>([])
         let store = FeatureTestSupport.store {
@@ -14,7 +14,7 @@ struct AppFeatureMonitoringTests {
         }
         let monitor = await store.send(.startMonitoring) { $0.isMonitoring = true }
         for index in 0..<2 {
-            if index > 0 { await clock.advance(by: .seconds(3_600)) }
+            if index > 0 { await clock.advance(by: .seconds(60)) }
             await store.receive(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(index) }
             if index == 0 {
                 await store.receive(.capacityRead(FeatureTestSupport.id(index), 0, false, 100)) { $0.freeSpaceBytes = 100 }
@@ -30,7 +30,7 @@ struct AppFeatureMonitoringTests {
         #expect(checks.value.allSatisfy { $0.trigger == .automatic && $0.event == .check && $0.message == "Automatic cleanup is disabled." })
         await store.send(.stopMonitoring) { $0.isMonitoring = false }
         await monitor.finish()
-        await clock.advance(by: .seconds(3_600))
+        await clock.advance(by: .seconds(60))
         await store.finish()
     }
 
@@ -54,6 +54,7 @@ struct AppFeatureMonitoringTests {
         }
         await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), true, nil)) {
             $0.automaticCheckID = nil; $0.activityRevision = 1
+            $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
         await store.receive(.scanFinished(FeatureTestSupport.id(0), .automatic, [low, high], 100, DashboardSnapshot())) {

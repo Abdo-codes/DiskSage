@@ -13,6 +13,9 @@ extension AppFeature {
                 state.agentToolReply = AgentToolReply(data: result); return .none
             }
             guard let id = request.requestID else { throw FeatureFailure(message: "A UUID request_id is required.") }
+            if let id = request.requestID, try worktreeClient.receipt(id) != nil {
+                throw FeatureFailure(message: "request_id belongs to a worktree request.")
+            }
             let receipt: ToolMutationReceipt?
             if name.hasSuffix("_schedule") { receipt = try management.receipt(id) }
             else { receipt = try? management.receipt(id) }

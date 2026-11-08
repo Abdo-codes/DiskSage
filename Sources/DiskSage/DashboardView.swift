@@ -80,6 +80,17 @@ private struct DashboardActions: View {
             .modifier(DashboardActionStyle()).controlSize(.large)
             .disabled(!presentation.canCleanNow)
             .help("Review and confirm low-risk cleanup now, regardless of the low-disk threshold.")
+            Button {
+                UserDefaults.standard.set("worktrees", forKey: "reviewSelectedSection")
+                openReview()
+                model.store.send(.worktrees(.reviewUnused))
+            } label: {
+                Label("Clean Unchanged Worktrees…", systemImage: "arrow.triangle.branch")
+                    .frame(maxWidth: .infinity)
+            }
+            .modifier(DashboardActionStyle()).controlSize(.large)
+            .disabled(model.isBusy)
+            .help("Review eligible checkouts, ignored files and retained branches. Nothing is removed until you confirm.")
             if model.isScanning || model.isAdvising {
                 Button("Cancel", action: model.cancelCurrentOperation)
                     .buttonStyle(.borderless).font(.callout)

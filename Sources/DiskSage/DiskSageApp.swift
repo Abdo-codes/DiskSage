@@ -30,6 +30,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var settingsWindow: NSWindow?
     private var historyWindow: NSWindow?
     private var agentToolTask: Task<Void, Never>?
+    private var diskSpaceNotifications: DiskSpaceNotificationObserver?
     private var managementWindow: NSWindow?
     private var presentedManagementID: UUID?
     private var onboardingWindow: NSWindow?
@@ -45,6 +46,11 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         NotificationCenter.default.addObserver(self, selector: #selector(openToolWindow(_:)), name: .diskSageOpenWindow, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(recheckCleanupPreferences), name: .diskSageSettingsChanged, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(recheckDiskSpace), name: NSWorkspace.didWakeNotification, object: nil)
+        let notifications = DiskSpaceNotificationObserver { [weak self] in self?.recheckDiskSpace() }
+        diskSpaceNotifications = notifications
+        store.send(.storageNotificationsChanged(notifications.status))
         observe { [weak self] in self?.presentManagementApproval() }
         observe { [weak self] in
             guard let self else { return }
@@ -81,6 +87,12 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         if showOnboardingAtLaunch { showOnboarding(startAt: .welcome) }
     }
 
+    @objc private func recheckDiskSpace() {
+        if store.isMonitoring { store.send(.monitorTick) }
+    }
+
+    @objc private func recheckCleanupPreferences() { store.send(.monitoringPreferencesChanged) }
+
     @objc private func toggleDashboard(_ button: NSStatusBarButton) {
         if dashboard?.isVisible == true {
             dashboard?.hide()
@@ -99,6 +111,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         if reviewWindow == nil {
             let window = makeWindow(title: "DiskSage Review", width: 960, height: 660, resizable: true)
             ReviewWindowSizing.configure(window, model: model)
+            window.delegate = self
             reviewWindow = window
         }
         reviewWindow?.makeKeyAndOrderFront(nil)
@@ -279,6 +292,9 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     }
 
     func windowWillClose(_ notification: Notification) {
+        if notification.object as? NSWindow === reviewWindow, !model.worktrees.removing {
+            store.send(.worktrees(.dismiss))
+        }
         if notification.object as? NSWindow === onboardingWindow { finishOnboarding() }
         if notification.object as? NSWindow === managementWindow, let id = model.pendingManagementApproval?.id {
             store.send(.rejectManagement(id))
@@ -288,6 +304,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     @objc private func openToolWindow(_ notification: Notification) {
         switch notification.object as? String {
         case "review": showReview()
+        case "worktrees": UserDefaults.standard.set("worktrees", forKey: "reviewSelectedSection"); showReview()
         case "history": showHistory()
         case "settings": showSettings()
         case "tools":
@@ -311,7 +328,10 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         return .terminateNow
     }
 
-    func applicationWillTerminate(_ notification: Notification) { agentToolTask?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) {
+        diskSpaceNotifications?.stop()
+        agentToolTask?.cancel()
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

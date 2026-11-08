@@ -40,8 +40,10 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                     Toggle("Clean safe items automatically when disk space is low", isOn: $automaticCleanupEnabled)
+                        .onChange(of: automaticCleanupEnabled) { _, _ in model.store.send(.monitoringPreferencesChanged) }
                     Stepper("Cleanup threshold: \(cleanupThresholdGiB) GiB", value: $cleanupThresholdGiB, in: 5...100, step: 5)
                         .disabled(!automaticCleanupEnabled)
+                        .onChange(of: cleanupThresholdGiB) { _, _ in model.store.send(.monitoringPreferencesChanged) }
                     LabeledContent("Last automatic cleanup", value: model.automaticCleanupSummary)
                 }
             }

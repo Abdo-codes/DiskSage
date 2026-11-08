@@ -8,17 +8,21 @@ struct SafetyPolicyTests {
 
     @Test
     func allowsDerivedData() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
         let candidate = CleanupCandidate(
-            url: FileManager.default.homeDirectoryForCurrentUser
-                // Match the scanner even on a fresh host without DerivedData.
-                .appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
+            url: fixture.root.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
             name: "DerivedData",
             category: .build,
             size: 1,
             risk: .low,
             reason: "Generated"
         )
-        try policy.validate(candidate)
+        try FileManager.default.createDirectory(at: candidate.url, withIntermediateDirectories: true)
+        try SafetyPolicy(home: fixture.root).validate(candidate)
+        // The same allowlisted cache container must refuse nested checkout data.
+        try FileManager.default.createDirectory(at: candidate.url.appending(path: "SourcePackages/checkouts/dependency/.git"), withIntermediateDirectories: true)
+        #expect(throws: SafetyPolicyError.self) { try SafetyPolicy(home: fixture.root).validate(candidate) }
     }
 
     @Test
@@ -49,6 +53,19 @@ struct SafetyPolicyTests {
         )
         #expect(throws: SafetyPolicyError.self) {
             try policy.validate(candidate)
+        }
+    }
+
+    @Test func deniesUnknownScopeBeforeInspectingItsContents() throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let folder = fixture.root.appending(path: "Documents")
+        try FileManager.default.createDirectory(at: folder.appending(path: ".git"), withIntermediateDirectories: true)
+        let candidate = CleanupCandidate(url: folder, name: "Unknown", category: .cache, size: 1, risk: .low, reason: "Unsafe")
+        do {
+            try SafetyPolicy(home: fixture.root).validate(candidate)
+            Issue.record("Unknown scope must be denied")
+        } catch {
+            #expect(error.localizedDescription == "The path is outside DiskSage’s cleanup allowlist.")
         }
     }
 
