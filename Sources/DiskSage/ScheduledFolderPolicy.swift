@@ -43,9 +43,19 @@ enum ScheduledFolderPolicy {
     }
 
     /// Runs at scan and again before deletion. Keep rules added after the schedule was authorized still apply.
-    static func validate(_ schedule: CleanupSchedule, keep: KeepRules = .current()) throws {
+    static func validate(_ schedule: CleanupSchedule, keep: KeepRules = .current(),
+                         home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                         simctl: SimulatorInventory.Run = SimulatorInventory.simctl) throws {
         guard !keep.keeps(schedule.folder) else {
             throw SafetyPolicyError.refused("A keep rule in Settings protects this folder or something inside it.")
+        }
+        // A schedule over simulator data must not reach a device whose name is kept. If simctl fails, nothing is deleted.
+        if !keep.simulatorNames.isEmpty,
+           KeepRules(paths: [SimulatorInventory.devicesRoot(home: home).path]).keeps(schedule.folder) {
+            let kept = try SimulatorInventory.keptDeviceFolders(keep, home: home, run: simctl)
+            guard !KeepRules(paths: kept.map(\.path)).keeps(schedule.folder) else {
+                throw SafetyPolicyError.refused("A keep rule in Settings protects a simulator in this folder.")
+            }
         }
         guard try identity(of: schedule.folder, scope: schedule.scope) == schedule.folderIdentity else {
             throw FeatureFailure(message: "The scheduled folder was replaced. Choose it again to authorize the new folder.")

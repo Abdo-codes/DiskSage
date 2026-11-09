@@ -83,4 +83,32 @@ struct KeepRulesTests {
         #expect(item.blockers.contains("A keep rule in Settings protects this checkout."))
         #expect(!item.canRemove)
     }
+
+    @Test func schedulesOverSimulatorDataRespectKeptNames() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let kept = "55555555-5555-5555-5555-555555555555", other = "66666666-6666-6666-6666-666666666666"
+        try f.write("Library/Developer/CoreSimulator/Devices/\(kept)/data/app.bin")
+        try f.write("Library/Developer/CoreSimulator/Devices/\(other)/data/app.bin")
+        let run: SimulatorInventory.Run = { _ in
+            let json = #"{"devices":{"r":[{"udid":"\#(kept)","name":"lane-1","state":"Shutdown","isAvailable":true},{"udid":"\#(other)","name":"iPhone","state":"Shutdown","isAvailable":true}]}}"#
+            return (0, Data(json.utf8))
+        }
+        let rules = KeepRules(simulatorNames: ["lane-*"])
+        func schedule(_ relative: String) throws -> CleanupSchedule {
+            let folder = CleanupPath.fileURL(f.base.appending(path: relative))
+            return CleanupSchedule(folder: folder, folderIdentity: try ScheduledFolderPolicy.identity(of: folder), scope: .folderContents)
+        }
+        let devices = "Library/Developer/CoreSimulator/Devices"
+        #expect(throws: (any Error).self) {
+            try ScheduledFolderPolicy.validate(try schedule(devices), keep: rules, home: f.base, simctl: run)
+        }
+        #expect(throws: (any Error).self) {
+            try ScheduledFolderPolicy.validate(try schedule("\(devices)/\(kept)/data"), keep: rules, home: f.base, simctl: run)
+        }
+        try ScheduledFolderPolicy.validate(try schedule("\(devices)/\(other)/data"), keep: rules, home: f.base, simctl: run)
+        let failing: SimulatorInventory.Run = { _ in (1, Data()) }
+        #expect(throws: (any Error).self) {
+            try ScheduledFolderPolicy.validate(try schedule("\(devices)/\(other)/data"), keep: rules, home: f.base, simctl: failing)
+        }
+    }
 }

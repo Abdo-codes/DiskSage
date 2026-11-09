@@ -66,6 +66,13 @@ enum SimulatorInventory {
         guard result.code == 0 else { throw SecureDeletionError.simulatorCommandFailed(result.code) }
     }
 
+    /// The folders of devices whose names a keep rule matches.
+    static func keptDeviceFolders(_ keep: KeepRules, home: URL, run: Run = simctl) throws -> [URL] {
+        let root = devicesRoot(home: home)
+        return try devices(run: run).filter { keep.keepsSimulator(named: $0.name) }
+            .map { root.appending(path: $0.udid, directoryHint: .isDirectory) }
+    }
+
     private static func identity(of url: URL) -> FileIdentity? {
         var info = stat()
         guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
