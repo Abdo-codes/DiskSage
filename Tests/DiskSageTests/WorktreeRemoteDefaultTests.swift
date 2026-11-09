@@ -16,6 +16,8 @@ struct WorktreeRemoteDefaultTests {
         let base = try f.git.text(f.main.path, ["rev-parse", "main"])
         _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/main", onDefault ? head : base])
         _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/topic", head])
+        // A symbolic alias that is not `<remote>/HEAD` does not make its target kept.
+        _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/origin/alias", "refs/remotes/origin/topic"])
         _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
         // A dangling default of another remote is ignored.
         _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/gone/HEAD", "refs/remotes/gone/main"])

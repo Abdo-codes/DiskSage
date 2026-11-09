@@ -100,8 +100,14 @@ struct WorktreeInspector: Sendable {
         }
         // A remote's default branch (the target of `refs/remotes/<remote>/HEAD`) is never deleted after a merge,
         // so its commits count as kept. Other remote branches are pruned after a merge, so they do not count.
-        let defaults = Set(try git.text(path, ["for-each-ref", "--format=%(symref)", "refs/remotes"])
-            .split(separator: "\n").map(String.init).filter { $0.hasPrefix("refs/remotes/") })
+        // Only `refs/remotes/<remote>/HEAD` names a default branch; other symbolic remote refs are aliases.
+        let defaults = Set(try git.text(path, ["for-each-ref", "--format=%(refname) %(symref)", "refs/remotes"])
+            .split(separator: "\n").compactMap { line -> String? in
+                let pair = line.split(separator: " ", maxSplits: 1).map(String.init)
+                guard pair.count == 2, pair[1].hasPrefix("refs/remotes/") else { return nil }
+                let name = pair[0].split(separator: "/", omittingEmptySubsequences: false)
+                return name.count == 4 && name.last == "HEAD" ? pair[1] : nil
+            })
         // A dangling `<remote>/HEAD` resolves to nothing, so only refs that exist are used.
         var kept: [String] = []
         if !defaults.isEmpty {
