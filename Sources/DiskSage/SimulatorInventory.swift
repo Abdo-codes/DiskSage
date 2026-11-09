@@ -7,7 +7,10 @@ enum SimulatorInventory {
     typealias Run = @Sendable ([String]) throws -> (code: Int32, data: Data)
 
     static let simctl: Run = { arguments in
-        let output = try WorktreeGitProcess().execute("/usr/bin/xcrun", ["simctl"] + arguments)
+        // A large device can take more than the 20-second inspection limit to delete. Stopping simctl
+        // part way would report a failure for a deletion that already started, so only reads time out.
+        let output = try WorktreeGitProcess().execute("/usr/bin/xcrun", ["simctl"] + arguments,
+                                                      allowTermination: arguments.first != "delete")
         return (output.code, output.data)
     }
 
