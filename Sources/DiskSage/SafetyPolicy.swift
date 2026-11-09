@@ -45,6 +45,15 @@ struct SafetyPolicy: Sendable {
         if candidate.deletionMode == .simulatorDevices {
             throw SafetyPolicyError.refused("DiskSage deletes simulators one device at a time. Scan again.")
         }
+        if candidate.deletionMode == .toolCommand {
+            // The tool deletes inside its own cache. ToolCacheInventory checks activity again before it runs.
+            guard ToolCache.matching(url, home: home) != nil, candidate.identity != FileIdentity(device: 0, inode: 0) else {
+                throw SafetyPolicyError.refused("A tool command candidate must be a known tool cache folder.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            return
+        }
         if candidate.deletionMode == .simulatorDevice {
             // simctl removes the folder. SimulatorInventory checks the state and activity again before deletion.
             guard url.deletingLastPathComponent() == SimulatorInventory.devicesRoot(home: home),

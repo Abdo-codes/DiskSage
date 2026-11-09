@@ -50,6 +50,8 @@ enum DeletionMode: String, Codable, Sendable {
     case simulatorDevices
     /// One simulator device, deleted with `simctl delete <udid>`.
     case simulatorDevice
+    /// A tool cache, cleaned with the tool's own command (see `ToolCache`).
+    case toolCommand
     case generatedFiles
 }
 

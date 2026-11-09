@@ -30,7 +30,9 @@ struct WorktreeGitProcess: Sendable {
         }
         return blockers
     }
-    func execute(_ executable: String, _ args: [String], allowTermination: Bool = true) throws -> Output {
+    /// `environment` adds to the fixed environment. A run that is still going after `timeout` seconds is stopped.
+    func execute(_ executable: String, _ args: [String], allowTermination: Bool = true,
+                 timeout: TimeInterval = 20, environment: [String: String] = [:]) throws -> Output {
         let directory = FileManager.default.temporaryDirectory.appending(path: "disksage-git-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -44,11 +46,12 @@ struct WorktreeGitProcess: Sendable {
         process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
             "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
+            .merging(environment) { _, added in added }
         process.standardOutput = handle
         process.standardError = handle
         process.standardInput = FileHandle.nullDevice
         try process.run()
-        let deadline = Date().addingTimeInterval(20)
+        let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning {
             let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             if allowTermination && (Task.isCancelled || Date() > deadline || size > 8_000_000) {
@@ -56,7 +59,7 @@ struct WorktreeGitProcess: Sendable {
                 usleep(100_000)
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                 process.waitUntilExit()
-                throw FeatureFailure(message: "Git inspection cancelled or exceeded its time/output limit.")
+                throw FeatureFailure(message: "\(URL(fileURLWithPath: executable).lastPathComponent) was cancelled or exceeded its time/output limit.")
             }
             usleep(10_000)
         }

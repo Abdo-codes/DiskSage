@@ -46,6 +46,8 @@ struct CleanupService: Sendable {
                  try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              } else if candidate.deletionMode == .simulatorDevice {
                  try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
+             } else if candidate.deletionMode == .toolCommand {
+                 try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture())
              } else {
                  let activity = try CleanupActivity.capture()
                  try activity.requireIdle(candidate.url)

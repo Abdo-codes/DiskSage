@@ -8,6 +8,7 @@ extension CleanupCandidate {
         case .generatedFiles: "Deletes only verified generated files from this scan. Source, test evidence, installed tool bundles, and the parent folder stay."
         case .simulatorDevices: "Refused: DiskSage deletes simulators one device at a time."
         case .simulatorDevice: "Deletes this one simulator device with simctl, including its installed apps and their data."
+        case .toolCommand: "Runs the tool's own cleanup command. The tool decides what to keep."
         }
     }
 }
