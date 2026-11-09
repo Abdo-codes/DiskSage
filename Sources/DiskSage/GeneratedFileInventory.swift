@@ -55,7 +55,10 @@ struct GeneratedFileInventory: Sendable {
         guard fstat(fd, &rootInfo) == 0, rootInfo.st_uid == getuid() else {
             throw FeatureFailure(message: "The generated folder is not owned by the current user.")
         }
-        var entries: [GeneratedFileEntry] = [], visited = 0, activeGroups = Set<String>()
+        var entries: [GeneratedFileEntry] = [], visited = 0, activeGroups = Set<String>(), freshGroups = Set<String>()
+        // In Xcode's shared DerivedData, a project folder with no change for a day goes to the whole-folder rule.
+        // The time comes from `cutoff`, so the scan and the deletion agree.
+        let handOff = cutoff.addingTimeInterval(GeneratedCleanupPolicy.minimumAge - TemporaryBuildOutput.day)
         if let group = scope.group([]), !GeneratedFileStamp(rootInfo).isOlder(than: cutoff) { activeGroups.insert(group) }
         func walk(_ parent: Int32, _ relative: [String]) throws {
             try Task.checkCancellation()
@@ -87,6 +90,7 @@ struct GeneratedFileInventory: Sendable {
                 }
                 guard info.st_dev == rootInfo.st_dev else { throw SecureDeletionError.crossedFilesystem(path.joined(separator: "/")) }
                 if let group = scope.group(path), !GeneratedFileStamp(info).isOlder(than: cutoff) { activeGroups.insert(group) }
+                if scope == .perChild, let group = path.first, !GeneratedFileStamp(info).isOlder(than: handOff) { freshGroups.insert(group) }
                 guard info.st_uid == getuid() else { continue }
                 if info.st_mode & S_IFMT == S_IFDIR {
                     guard GeneratedCleanupPolicy.mayDescend(path) else { continue }
@@ -113,6 +117,12 @@ struct GeneratedFileInventory: Sendable {
         try walk(fd, [])
         if !activeGroups.isEmpty {
             entries.removeAll { scope.group($0.parts).map(activeGroups.contains) ?? false }
+        }
+        if scope == .perChild {
+            entries.removeAll { part in
+                guard let group = part.parts.first else { return false }
+                return TemporaryBuildOutput.isXcodeProjectFolderName(group) && !freshGroups.contains(group)
+            }
         }
         return Self(rootIdentity: FileIdentity(device: UInt64(rootInfo.st_dev), inode: UInt64(rootInfo.st_ino)),
                     entries: entries.sorted { $0.path < $1.path })

@@ -20,6 +20,19 @@ enum TemporaryBuildOutput {
         case codexVisualizationDay
         /// One day of Codex session transcripts: `~/.codex/sessions/<yyyy>/<mm>/<dd>`.
         case codexSessionDay
+        /// One project folder in Xcode's DerivedData: `<Project>-<28 letters>`.
+        case xcodeProjectBuild
+    }
+
+    static func xcodeDerivedData(home: URL) -> URL {
+        CleanupPath.fileURL(home).appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory)
+    }
+
+    /// Xcode names a project folder `<Project>-<hash>`, with a 28-letter lowercase hash.
+    static func isXcodeProjectFolderName(_ name: String) -> Bool {
+        guard let dash = name.lastIndex(of: "-"), dash > name.startIndex else { return false }
+        let hash = name[name.index(after: dash)...]
+        return hash.count == 28 && hash.allSatisfy { ("a"..."z").contains($0) }
     }
 
     static let hour: TimeInterval = 3_600
@@ -41,6 +54,10 @@ enum TemporaryBuildOutput {
         let url = CleanupPath.fileURL(url)
         guard isRealDirectory(url) else { return nil }
         if let day = codexDay(url, home: home) { return day }
+        if url.deletingLastPathComponent() == xcodeDerivedData(home: home) {
+            return isXcodeProjectFolderName(url.lastPathComponent) &&
+                isRegularFile(url.appending(path: "info.plist")) ? .xcodeProjectBuild : nil
+        }
         let claude = claudeRoot.pathComponents
         let documents = derivedDataRoots(home: home)[1].pathComponents
         if url.pathComponents.starts(with: claude) {
@@ -96,7 +113,7 @@ enum TemporaryBuildOutput {
     /// Top-level names where Git data is expected for a kind. Git data anywhere else stops the offer.
     static func gitAllowedUnder(_ kind: Kind) -> Set<String> {
         switch kind {
-        case .derivedData: ["SourcePackages"]
+        case .derivedData, .xcodeProjectBuild: ["SourcePackages"]
         case .swiftPackages: ["checkouts", "repositories"]
         default: []
         }
@@ -121,6 +138,8 @@ enum TemporaryBuildOutput {
         case .codexVisualizationDay: idle >= 7 * day ? .low : (idle >= day ? .medium : nil)
         // Transcripts can be resumed or searched: review only, never automatic.
         case .codexSessionDay: idle >= 7 * day ? .medium : nil
+        // The compiled-files rule hands a project over after one day. Xcode rebuilds it, but that takes time.
+        case .xcodeProjectBuild: idle >= 3 * day ? .low : (idle >= day ? .medium : nil)
         }
     }
 
@@ -145,6 +164,8 @@ enum TemporaryBuildOutput {
             return "One day of Codex screenshots and recordings with no changes for \(age)."
         case .codexSessionDay:
             return "One day of Codex session transcripts with no changes for \(age). You cannot resume these sessions after deletion."
+        case .xcodeProjectBuild:
+            return "Xcode DerivedData for one project with no changes for \(age). The whole folder is deleted; Xcode builds it again."
         }
     }
 
