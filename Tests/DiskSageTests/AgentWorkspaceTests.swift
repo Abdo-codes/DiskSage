@@ -89,6 +89,17 @@ struct AgentWorkspaceTests {
         #expect(Set(AgentWorkspaceDiscovery.topLevel(temporaryRoot: f.base, claudeRoot: claude)) == [other, lane])
     }
 
+    @Test func discoveredSwiftPackageFolderIsOfferedWhole() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        try f.write("Documents/Codex/2026-11-08/yo/work/.build/workspace-state.json")
+        try f.write("Documents/Codex/2026-11-08/yo/work/.build/repositories/pkg-1/HEAD")
+        let build = CleanupPath.fileURL(f.base.appending(path: "Documents/Codex/2026-11-08/yo/work/.build"))
+        let result = TemporaryBuildInspector.scan(discovered: [build], activity: .idle, now: f.later(hours: 30),
+                                                  home: f.base, extraFolders: { [] })
+        #expect(result.candidates.map(\.url) == [build])
+        #expect(result.generatedRoots.isEmpty)
+    }
+
     @Test func aFolderFoundTwiceIsOfferedOnce() throws {
         let f = try TemporaryBuildFixture(); defer { f.remove() }
         let derived = try f.derivedData("app-derived")

@@ -17,7 +17,8 @@ enum TemporaryBuildInspector {
         let sessions = ClaudeSessionActivity.Cache(activity: activity, now: now)
         var result = ScanResult()
         for url in discovered where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
-            if TemporaryBuildOutput.kind(of: url, home: home) == .derivedData,
+            // DerivedData and SwiftPM folders found by the build discovery get the whole-folder check first.
+            if [.derivedData, .swiftPackages].contains(TemporaryBuildOutput.kind(of: url, home: home)),
                let candidate = inspect(url, activity: activity, now: now, home: home) {
                 result.candidates.append(candidate)
             } else {
