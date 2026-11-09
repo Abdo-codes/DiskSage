@@ -36,6 +36,8 @@ struct ToolCacheTests {
         #expect(found.map(\.url) == [brew])
         // The estimate comes from Homebrew's own dry run, not from the folder size.
         #expect(found.first?.size == 1_500_000_000)
+        // The cleanup must never uninstall packages.
+        #expect(ToolCache.all(home: f.base).first?.environment["HOMEBREW_NO_AUTOREMOVE"] == "1")
         let nothing = FakeTool(dryRun: "")
         #expect(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew, run: nothing.run, size: big).isEmpty)
         #expect(nothing.commands.isEmpty)

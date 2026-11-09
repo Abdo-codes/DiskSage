@@ -25,7 +25,9 @@ struct ToolCache: Sendable, Equatable {
                       // `cleanup -s` keeps downloads of installed packages, so the folder size is not the estimate.
                       estimateArguments: ["cleanup", "-s", "--dry-run"],
                       environment: ["HOMEBREW_CACHE": brew.path, "HOMEBREW_NO_AUTO_UPDATE": "1",
-                                    "HOMEBREW_NO_ANALYTICS": "1", "HOMEBREW_NO_ENV_HINTS": "1"],
+                                    "HOMEBREW_NO_ANALYTICS": "1", "HOMEBREW_NO_ENV_HINTS": "1",
+                                    // Cleanup must never uninstall unused dependencies.
+                                    "HOMEBREW_NO_AUTOREMOVE": "1"],
                       reason: "Homebrew downloads and old versions of installed packages. `brew cleanup -s` removes them; Homebrew downloads them again when needed."),
             ToolCache(name: "uv package cache", folder: uv,
                       executables: ["/opt/homebrew/bin/uv", "/usr/local/bin/uv",
