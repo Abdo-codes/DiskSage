@@ -36,18 +36,25 @@ struct XcodeProjectBuildTests {
         #expect(TemporaryBuildInspector.inspect(project, activity: busy, now: f.later(hours: 80), home: f.base) == nil)
     }
 
-    @Test func compiledFilesRuleHandsIdleProjectsToTheWholeFolderRule() throws {
+    @Test func compiledFilesRuleHandsOnlyAcceptedProjectsToTheWholeFolderRule() throws {
         let f = try GeneratedCleanupFixture(relative: "Library/Developer/Xcode/DerivedData"); defer { f.remove() }
+        try f.write("App-\(hash)/info.plist")
         try f.write("App-\(hash)/Build/Intermediates.noindex/a.o")
+        try f.write("NoPlist-\(hash)/Build/Intermediates.noindex/c.o")
         try f.write("wt-reflex/Build/Intermediates.noindex/b.o")
+        func read(hoursLater: Double, activity: CleanupActivity = .idle) throws -> [String] {
+            let cutoff = Date().addingTimeInterval(hoursLater * 3_600)
+            return try GeneratedFileInventory.read(f.root, rule: .buildArtifacts, cutoff: cutoff, activity: .perChild,
+                handsOff: GeneratedFileDeleter.wholeFolderRule(activity: activity, cutoff: cutoff, home: f.home)).entries.map(\.path)
+        }
+        let all = ["App-\(hash)/Build/Intermediates.noindex/a.o", "NoPlist-\(hash)/Build/Intermediates.noindex/c.o",
+                   "wt-reflex/Build/Intermediates.noindex/b.o"]
         // Two hours later: the project changed within a day, so its compiled files stay with this rule.
-        let soon = try GeneratedFileInventory.read(f.root, rule: .buildArtifacts, cutoff: Date().addingTimeInterval(7_200),
-                                                   activity: .perChild)
-        #expect(soon.entries.map(\.path) == ["App-\(hash)/Build/Intermediates.noindex/a.o",
-                                             "wt-reflex/Build/Intermediates.noindex/b.o"])
-        // Two days later: the project folder goes to the whole-folder rule. Other folders stay.
-        let later = try GeneratedFileInventory.read(f.root, rule: .buildArtifacts, cutoff: Date().addingTimeInterval(172_800),
-                                                    activity: .perChild)
-        #expect(later.entries.map(\.path) == ["wt-reflex/Build/Intermediates.noindex/b.o"])
+        #expect(try read(hoursLater: 2) == all)
+        // Two days later: only the project that the whole-folder rule accepts leaves this rule.
+        #expect(try read(hoursLater: 48) == Array(all.dropFirst()))
+        // A build that uses the project keeps it out of the whole-folder rule, so its files stay here.
+        let project = f.root.appending(path: "App-\(hash)").path
+        #expect(try read(hoursLater: 48, activity: CleanupActivity(paths: [project])) == all)
     }
 }

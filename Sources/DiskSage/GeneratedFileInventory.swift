@@ -47,6 +47,7 @@ struct GeneratedFileInventory: Sendable {
     /// changed after `cutoff` also removes every file of its group from the inventory.
     static func read(_ root: URL, rule: GeneratedCleanupRule, cutoff: Date,
                      activity scope: GeneratedActivityScope = .none,
+                     handsOff: (URL) -> Bool = { _ in false },
                      maximumEntries: Int = 200_000) throws -> Self {
         let parts = CleanupPath.fileURL(root).pathComponents
         let fd = try SecureFileDeleter.openDirectoryChain(Array(parts.dropFirst()))
@@ -55,10 +56,7 @@ struct GeneratedFileInventory: Sendable {
         guard fstat(fd, &rootInfo) == 0, rootInfo.st_uid == getuid() else {
             throw FeatureFailure(message: "The generated folder is not owned by the current user.")
         }
-        var entries: [GeneratedFileEntry] = [], visited = 0, activeGroups = Set<String>(), freshGroups = Set<String>()
-        // In Xcode's shared DerivedData, a project folder with no change for a day goes to the whole-folder rule.
-        // The time comes from `cutoff`, so the scan and the deletion agree.
-        let handOff = cutoff.addingTimeInterval(GeneratedCleanupPolicy.minimumAge - TemporaryBuildOutput.day)
+        var entries: [GeneratedFileEntry] = [], visited = 0, activeGroups = Set<String>()
         if let group = scope.group([]), !GeneratedFileStamp(rootInfo).isOlder(than: cutoff) { activeGroups.insert(group) }
         func walk(_ parent: Int32, _ relative: [String]) throws {
             try Task.checkCancellation()
@@ -90,7 +88,6 @@ struct GeneratedFileInventory: Sendable {
                 }
                 guard info.st_dev == rootInfo.st_dev else { throw SecureDeletionError.crossedFilesystem(path.joined(separator: "/")) }
                 if let group = scope.group(path), !GeneratedFileStamp(info).isOlder(than: cutoff) { activeGroups.insert(group) }
-                if scope == .perChild, let group = path.first, !GeneratedFileStamp(info).isOlder(than: handOff) { freshGroups.insert(group) }
                 guard info.st_uid == getuid() else { continue }
                 if info.st_mode & S_IFMT == S_IFDIR {
                     guard GeneratedCleanupPolicy.mayDescend(path) else { continue }
@@ -118,11 +115,12 @@ struct GeneratedFileInventory: Sendable {
         if !activeGroups.isEmpty {
             entries.removeAll { scope.group($0.parts).map(activeGroups.contains) ?? false }
         }
+        // In Xcode's shared DerivedData, a project folder that the whole-folder rule accepts goes to that rule.
+        // Files of every other folder stay here, so one of the two rules always offers them.
         if scope == .perChild {
-            entries.removeAll { part in
-                guard let group = part.parts.first else { return false }
-                return TemporaryBuildOutput.isXcodeProjectFolderName(group) && !freshGroups.contains(group)
-            }
+            let projects = Set(entries.compactMap(\.parts.first).filter(TemporaryBuildOutput.isXcodeProjectFolderName))
+            let handed = projects.filter { handsOff(CleanupPath.fileURL(root.appending(path: $0, directoryHint: .isDirectory))) }
+            if !handed.isEmpty { entries.removeAll { $0.parts.first.map(handed.contains) ?? false } }
         }
         return Self(rootIdentity: FileIdentity(device: UInt64(rootInfo.st_dev), inode: UInt64(rootInfo.st_ino)),
                     entries: entries.sorted { $0.path < $1.path })

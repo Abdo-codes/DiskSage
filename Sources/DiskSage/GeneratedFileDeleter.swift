@@ -17,7 +17,8 @@ enum GeneratedFileDeleter {
         guard GeneratedCleanupScope.rule(for: root, home: policy.home) == rule else { return nil }
         try activity.requireIdle(root, rule: rule)
         let inventory = try GeneratedFileInventory.read(root, rule: rule, cutoff: cutoff,
-            activity: GeneratedActivityScope.of(root, rule: rule, home: policy.home), maximumEntries: maximumEntries)
+            activity: GeneratedActivityScope.of(root, rule: rule, home: policy.home),
+            handsOff: wholeFolderRule(activity: activity, cutoff: cutoff, home: policy.home), maximumEntries: maximumEntries)
         guard inventory.bytes > 0 else { return nil }
         let snapshot = GeneratedCleanupSnapshot(rule: rule, cutoff: cutoff, digest: inventory.digest, fileCount: inventory.entries.count)
         let candidate = CleanupCandidate(url: CleanupPath.fileURL(root), name: name, category: category,
@@ -28,14 +29,22 @@ enum GeneratedFileDeleter {
         return candidate
     }
 
+    /// True when the whole-folder rule offers this folder. The time comes from `cutoff`, so the scan and the deletion agree.
+    static func wholeFolderRule(activity: CleanupActivity, cutoff: Date, home: URL) -> (URL) -> Bool {
+        let now = cutoff.addingTimeInterval(GeneratedCleanupPolicy.minimumAge)
+        return { TemporaryBuildInspector.inspect($0, activity: activity, now: now, home: home) != nil }
+    }
+
     static func delete(_ candidate: CleanupCandidate, policy: SafetyPolicy = SafetyPolicy(),
                        activity: Activity = { try CleanupActivity.capture() },
                        beforeEntry: (Int) throws -> Void = { _ in }, entryRemoved: () -> Void) throws {
         try policy.validate(candidate)
         guard let snapshot = candidate.generatedSnapshot else { throw SecureDeletionError.identityChanged }
-        try activity().requireIdle(candidate.url, rule: snapshot.rule)
+        let current = try activity()
+        try current.requireIdle(candidate.url, rule: snapshot.rule)
         let inventory = try GeneratedFileInventory.read(candidate.url, rule: snapshot.rule, cutoff: snapshot.cutoff,
-            activity: GeneratedActivityScope.of(candidate.url, rule: snapshot.rule, home: policy.home))
+            activity: GeneratedActivityScope.of(candidate.url, rule: snapshot.rule, home: policy.home),
+            handsOff: wholeFolderRule(activity: current, cutoff: snapshot.cutoff, home: policy.home))
         guard inventory.rootIdentity == candidate.identity, inventory.digest == snapshot.digest,
               inventory.entries.count == snapshot.fileCount, inventory.bytes == candidate.size else {
             throw SecureDeletionError.identityChanged
