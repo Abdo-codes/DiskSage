@@ -28,6 +28,14 @@ enum TemporaryBuildInspector {
         for url in extraFolders() where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
             if let candidate = inspect(url, activity: activity, now: now, home: home) { result.candidates.append(candidate) }
         }
+        // A whole folder already covers everything inside it: offer each file once.
+        let wholes = result.candidates.map { CleanupPath.fileURL($0.url).path }
+        func covered(_ url: URL) -> Bool {
+            let path = CleanupPath.fileURL(url).path
+            return wholes.contains { path.hasPrefix($0 + "/") }
+        }
+        result.candidates.removeAll { covered($0.url) }
+        result.generatedRoots.removeAll(where: covered)
         return result
     }
 

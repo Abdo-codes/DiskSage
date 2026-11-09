@@ -57,4 +57,15 @@ struct ClaudeSessionTests {
             try TemporaryBuildInspector.verifyBeforeDeletion(target, activity: .idle, now: f.later(hours: 2))
         }
     }
+
+    @Test func staleScratchpadCoversTheBuildFoldersInside() throws {
+        let f = try fixture(); defer { f.remove() }
+        let derived = try f.derivedData("abc/scratchpad/dd")
+        let generated = try f.folder("abc/scratchpad/tool/.build")
+        let scratchpad = CleanupPath.fileURL(f.base.appending(path: "abc/scratchpad"))
+        let result = TemporaryBuildInspector.scan(discovered: [derived, generated], activity: .idle,
+            now: f.later(hours: 80), extraFolders: { [scratchpad] })
+        #expect(result.candidates.map(\.url) == [scratchpad])
+        #expect(result.generatedRoots.isEmpty)
+    }
 }
