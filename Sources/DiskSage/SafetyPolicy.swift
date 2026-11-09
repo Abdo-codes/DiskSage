@@ -14,11 +14,15 @@ enum SafetyPolicyError: LocalizedError {
 struct SafetyPolicy: Sendable {
     var home = FileManager.default.homeDirectoryForCurrentUser
     var now = Date()
+    var keep = KeepRules.current()
     func validate(_ candidate: CleanupCandidate) throws {
         let home = CleanupPath.fileURL(self.home)
         let developer = home.appending(path: "Developer", directoryHint: .isDirectory)
         let url = CleanupPath.fileURL(candidate.url)
         let path = url.path
+        guard !keep.keeps(url) else {
+            throw SafetyPolicyError.refused("A keep rule in Settings protects this item.")
+        }
 
         guard path != "/", url != home, url != developer else {
             throw SafetyPolicyError.refused("DiskSage refuses broad root directories.")

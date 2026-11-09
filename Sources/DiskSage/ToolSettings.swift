@@ -28,6 +28,10 @@ enum ToolSettings {
             "ollama_model": text("ollamaModel", "Ollama model (cloud models may send metadata remotely)"),
             "codex_metadata_consent": bool("agentMetadataConsent", "Share metadata through Codex"),
             "claude_metadata_consent": bool("claudeMetadataConsent", "Share metadata through Claude"),
+            "keep_paths": Entry(key: KeepRules.pathsKey, label: "Kept paths (one per line)", fallback: .string(""),
+                                schema: ["type": "string", "maxLength": 16_384]),
+            "keep_simulator_names": Entry(key: KeepRules.simulatorNamesKey, label: "Kept simulator names (patterns)", fallback: .string(""),
+                                          schema: ["type": "string", "maxLength": 4_096]),
             "ollama_metadata_consent": bool("ollamaMetadataConsent", "Share metadata through Ollama (including cloud models)")]
     }
     static var schema: [String: [String: Any]] { entries.mapValues(\.schema) }
@@ -47,6 +51,9 @@ enum ToolSettings {
         try MCPManagementSchema.validate(raw, schema: ["type": "object", "properties": schema])
         if let threshold = patch["cleanup_threshold_gib"]?.integer, threshold % 5 != 0 {
             throw FeatureFailure(message: "The cleanup threshold must use 5 GiB steps.")
+        }
+        if let paths = patch["keep_paths"]?.string, !KeepRules.invalidPaths(paths).isEmpty {
+            throw FeatureFailure(message: "Kept paths must be absolute or start with ~/.")
         }
         for key in ["codex_executable_path", "claude_executable_path"] {
             if let path = patch[key]?.string, !path.isEmpty,

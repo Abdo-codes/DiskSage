@@ -28,11 +28,12 @@ enum SimulatorInventory {
 
     /// Shut-down devices that no process uses. Simulator data holds installed apps, so each one is a review item.
     static func candidates(activity: CleanupActivity, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                           keep: KeepRules = .current(),
                            run: Run = simctl, size: (URL) -> Int64? = DiskScanner.allocatedSize) -> [CleanupCandidate] {
         guard let devices = try? devices(run: run) else { return [] }
         let root = devicesRoot(home: home)
         return devices.compactMap { device in
-            guard !Task.isCancelled, device.isShutdown else { return nil }
+            guard !Task.isCancelled, device.isShutdown, !keep.keepsSimulator(named: device.name) else { return nil }
             let url = root.appending(path: device.udid, directoryHint: .isDirectory)
             guard !activity.contains(url), let identity = identity(of: url),
                   let bytes = size(url), bytes > 0 else { return nil }
@@ -45,13 +46,17 @@ enum SimulatorInventory {
     }
 
     /// Runs right before deletion: the device must still exist, be shut down, and have no process that uses it.
-    static func delete(_ candidate: CleanupCandidate, activity: CleanupActivity, run: Run = simctl) throws {
+    static func delete(_ candidate: CleanupCandidate, activity: CleanupActivity,
+                       keep: KeepRules = .current(), run: Run = simctl) throws {
         let udid = candidate.url.lastPathComponent
         guard SimulatorDevice.isUDID(udid) else {
             throw SafetyPolicyError.refused("The simulator folder name is not a device UDID.")
         }
         guard let device = try devices(run: run).first(where: { $0.udid == udid.uppercased() }) else {
             throw FeatureFailure(message: "The simulator no longer exists. Scan again.")
+        }
+        guard !keep.keepsSimulator(named: device.name) else {
+            throw SafetyPolicyError.refused("A keep rule in Settings protects \(device.name).")
         }
         guard device.isShutdown else {
             throw FeatureFailure(message: "\(device.name) is \(device.state.lowercased()). Shut it down and scan again.")

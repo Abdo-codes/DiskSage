@@ -48,12 +48,12 @@ enum TemporaryBuildInspector {
         let url = CleanupPath.fileURL(url)
         guard let kind = TemporaryBuildOutput.kind(of: url, home: home), !activity.contains(url),
               let survey = try? survey(url, kind: kind), survey.bytes > 0,
-              let risk = TemporaryBuildOutput.risk(kind, idle: survey.idle(at: now)) else { return nil }
+              let risk = risk(kind, survey, now: now) else { return nil }
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return nil }
         let name = url.path.hasPrefix(home.path + "/") ? String(url.path.dropFirst(home.path.count + 1)) : url.path
         let candidate = CleanupCandidate(url: url, name: name, category: TemporaryBuildOutput.category(kind),
-            size: survey.bytes, risk: risk, reason: TemporaryBuildOutput.reason(kind, idle: survey.idle(at: now)),
+            size: survey.bytes, risk: risk, reason: reason(kind, survey, now: now),
             identity: FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)), deletionMode: .item)
         guard (try? SafetyPolicy(home: home, now: now).validate(candidate)) != nil else { return nil }
         return candidate
@@ -72,7 +72,7 @@ enum TemporaryBuildInspector {
             throw FeatureFailure(message: "A Claude session still uses this folder. Nothing was deleted.")
         }
         let current = try survey(url, kind: kind)
-        guard let risk = TemporaryBuildOutput.risk(kind, idle: current.idle(at: now)), risk <= candidate.risk else {
+        guard let risk = risk(kind, current, now: now), risk <= candidate.risk else {
             throw FeatureFailure(message: "The folder changed after the scan. Scan again.")
         }
     }
@@ -95,6 +95,21 @@ enum TemporaryBuildInspector {
     private static func isBundleName(_ url: URL) -> Bool {
         let name = url.lastPathComponent.lowercased()
         return name.hasSuffix(".xcresult") || name.hasSuffix(".app")
+    }
+
+    /// Agent folders whose videos can be the only copy, such as reference clips or screen recordings.
+    private static let mayHoldOnlyCopies: Set<TemporaryBuildOutput.Kind> = [.scratchpad, .codexVisualizationDay, .codexSessionDay]
+
+    /// The kind's risk, raised to high when an agent folder holds video files.
+    static func risk(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date) -> RiskLevel? {
+        guard let base = TemporaryBuildOutput.risk(kind, idle: survey.idle(at: now)) else { return nil }
+        return survey.mediaBytes > 0 && mayHoldOnlyCopies.contains(kind) ? .high : base
+    }
+
+    private static func reason(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date) -> String {
+        let reason = TemporaryBuildOutput.reason(kind, idle: survey.idle(at: now))
+        guard survey.mediaBytes > 0, mayHoldOnlyCopies.contains(kind) else { return reason }
+        return reason + " It holds video files. Keep them if no other copy exists."
     }
 
     private static func survey(_ url: URL, kind: TemporaryBuildOutput.Kind) throws -> FolderSurvey {
