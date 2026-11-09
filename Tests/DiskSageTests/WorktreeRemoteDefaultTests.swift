@@ -14,7 +14,12 @@ struct WorktreeRemoteDefaultTests {
         _ = try f.git.run(path, ["commit", "--allow-empty", "-m", "merged work"])
         let head = try f.git.text(path, ["rev-parse", "HEAD"])
         let base = try f.git.text(f.main.path, ["rev-parse", "main"])
-        _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/main", onDefault ? head : base])
+        // Remote names can contain a slash. The remote must be configured for its HEAD to count.
+        _ = try f.git.run(f.main.path, ["remote", "add", "team/origin", "https://example.invalid/repo.git"])
+        _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/team/origin/main", onDefault ? head : base])
+        _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/team/origin/HEAD", "refs/remotes/team/origin/main"])
+        _ = try f.git.run(f.main.path, ["remote", "add", "origin", "https://example.invalid/repo.git"])
+        _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/main", base])
         _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/topic", head])
         // A symbolic alias that is not `<remote>/HEAD` does not make its target kept.
         _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/origin/alias", "refs/remotes/origin/topic"])
@@ -26,13 +31,15 @@ struct WorktreeRemoteDefaultTests {
         let warnings = item.removalWarnings ?? []
         let flagged = warnings.contains { $0.hasPrefix("Detached HEAD commits") || $0.hasPrefix("Worktree recovery history") }
         #expect(flagged == !onDefault, "\(warnings)")
-        #expect(item.retainedRefs["refs/remotes/origin/main"] == (onDefault ? head : base))
+        #expect(item.retainedRefs["refs/remotes/team/origin/main"] == (onDefault ? head : base))
+        #expect(item.retainedRefs["refs/remotes/origin/main"] == base)
         #expect(item.retainedRefs["refs/remotes/origin/topic"] == nil)
     }
 
     @Test func removalSucceedsWithARetainedRemoteDefault() throws {
         let f = try WorktreeFixture(); defer { f.dispose() }
         let base = try f.git.text(f.main.path, ["rev-parse", "main"])
+        _ = try f.git.run(f.main.path, ["remote", "add", "origin", "https://example.invalid/repo.git"])
         _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/main", base])
         _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
         let item = try f.inspect()
