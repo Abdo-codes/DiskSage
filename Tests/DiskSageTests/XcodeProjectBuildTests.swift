@@ -57,4 +57,19 @@ struct XcodeProjectBuildTests {
         let project = f.root.appending(path: "App-\(hash)").path
         #expect(try read(hoursLater: 48, activity: CleanupActivity(paths: [project])) == all)
     }
+
+    @Test func onlyAScanThatOffersWholeFoldersHandsProjectsOff() throws {
+        let f = try GeneratedCleanupFixture(relative: "Library/Developer/Xcode/DerivedData"); defer { f.remove() }
+        try f.write("App-\(hash)/info.plist")
+        try f.write("App-\(hash)/Build/Intermediates.noindex/a.o")
+        let cutoff = Date().addingTimeInterval(172_800)
+        let policy = SafetyPolicy(home: f.home, now: cutoff.addingTimeInterval(GeneratedCleanupPolicy.minimumAge))
+        // A schedule offers no whole folders, so the compiled files stay with this rule.
+        let schedule = try #require(try GeneratedFileDeleter.inspect(f.root, name: "DerivedData", category: .build,
+            rule: .buildArtifacts, activity: .idle, cutoff: cutoff, policy: policy))
+        #expect(schedule.generatedSnapshot?.fileCount == 1 && schedule.generatedSnapshot?.handsOffWholeFolders == nil)
+        let scan = try GeneratedFileDeleter.inspect(f.root, name: "DerivedData", category: .build,
+            rule: .buildArtifacts, activity: .idle, cutoff: cutoff, policy: policy, handsOffWholeFolders: true)
+        #expect(scan == nil)
+    }
 }

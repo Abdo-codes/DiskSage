@@ -48,8 +48,9 @@ struct DiskScanner: Sendable {
             guard !Task.isCancelled, seen.insert(url.path).inserted else { return nil }
             if seed.deletionMode == .generatedFiles {
                 guard let rule = GeneratedCleanupScope.rule(for: url, home: home) else { return nil }
+                // This scan also offers whole folders, so idle DerivedData projects go to that rule.
                 return try? GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category,
-                                                       rule: rule, activity: currentActivity)
+                                                       rule: rule, activity: currentActivity, handsOffWholeFolders: true)
             }
             guard !currentActivity.contains(url) else { return nil }
             return inspect(url, name: seed.name, category: seed.category, risk: seed.risk,

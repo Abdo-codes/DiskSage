@@ -13,14 +13,17 @@ enum GeneratedFileDeleter {
 
     static func inspect(_ root: URL, name: String, category: CandidateCategory, rule: GeneratedCleanupRule,
                         activity: CleanupActivity, cutoff: Date = Date().addingTimeInterval(-GeneratedCleanupPolicy.minimumAge),
-                        policy: SafetyPolicy = SafetyPolicy(), maximumEntries: Int = 200_000) throws -> CleanupCandidate? {
+                        policy: SafetyPolicy = SafetyPolicy(), handsOffWholeFolders: Bool = false,
+                        maximumEntries: Int = 200_000) throws -> CleanupCandidate? {
         guard GeneratedCleanupScope.rule(for: root, home: policy.home) == rule else { return nil }
         try activity.requireIdle(root, rule: rule)
         let inventory = try GeneratedFileInventory.read(root, rule: rule, cutoff: cutoff,
             activity: GeneratedActivityScope.of(root, rule: rule, home: policy.home),
-            handsOff: wholeFolderRule(activity: activity, cutoff: cutoff, home: policy.home), maximumEntries: maximumEntries)
+            handsOff: handsOffWholeFolders ? wholeFolderRule(activity: activity, cutoff: cutoff, home: policy.home) : { _ in false },
+            maximumEntries: maximumEntries)
         guard inventory.bytes > 0 else { return nil }
-        let snapshot = GeneratedCleanupSnapshot(rule: rule, cutoff: cutoff, digest: inventory.digest, fileCount: inventory.entries.count)
+        let snapshot = GeneratedCleanupSnapshot(rule: rule, cutoff: cutoff, digest: inventory.digest, fileCount: inventory.entries.count,
+                                                handsOffWholeFolders: handsOffWholeFolders ? true : nil)
         let candidate = CleanupCandidate(url: CleanupPath.fileURL(root), name: name, category: category,
             size: inventory.bytes, risk: .low,
             reason: "\(snapshot.fileCount) verified generated files. Recent files, source, test evidence, installed dependencies and session data stay.",
@@ -29,7 +32,7 @@ enum GeneratedFileDeleter {
         return candidate
     }
 
-    /// True when the whole-folder rule offers this folder. The time comes from `cutoff`, so the scan and the deletion agree.
+    /// True when the whole-folder rule offers this folder. Only a scan that also offers whole folders uses it. The time comes from `cutoff`, so the scan and the deletion agree.
     static func wholeFolderRule(activity: CleanupActivity, cutoff: Date, home: URL) -> (URL) -> Bool {
         let now = cutoff.addingTimeInterval(GeneratedCleanupPolicy.minimumAge)
         return { TemporaryBuildInspector.inspect($0, activity: activity, now: now, home: home) != nil }
@@ -44,7 +47,8 @@ enum GeneratedFileDeleter {
         try current.requireIdle(candidate.url, rule: snapshot.rule)
         let inventory = try GeneratedFileInventory.read(candidate.url, rule: snapshot.rule, cutoff: snapshot.cutoff,
             activity: GeneratedActivityScope.of(candidate.url, rule: snapshot.rule, home: policy.home),
-            handsOff: wholeFolderRule(activity: current, cutoff: snapshot.cutoff, home: policy.home))
+            handsOff: snapshot.handsOffWholeFolders == true
+                ? wholeFolderRule(activity: current, cutoff: snapshot.cutoff, home: policy.home) : { _ in false })
         guard inventory.rootIdentity == candidate.identity, inventory.digest == snapshot.digest,
               inventory.entries.count == snapshot.fileCount, inventory.bytes == candidate.size else {
             throw SecureDeletionError.identityChanged
