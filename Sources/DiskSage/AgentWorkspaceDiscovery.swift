@@ -1,14 +1,16 @@
 import Foundation
 
 /// Finds folders that coding agents leave behind: Codex day folders, build output at the top of
-/// the Claude and temporary folders, and result bundles in Codex task folders.
+/// the Claude and temporary folders, and result bundles in Codex task folders. It also lists the
+/// Xcode folders that are offered whole: DerivedData projects and device symbols.
 /// It only lists folders. `TemporaryBuildOutput.kind` decides what each one is, and
 /// `TemporaryBuildInspector` checks age, activity and Git data.
 enum AgentWorkspaceDiscovery {
     static func folders(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let home = CleanupPath.fileURL(home)
         let found = codexDays(home: home) + topLevel() + taskBundles(home: home) +
-            children(TemporaryBuildOutput.xcodeDerivedData(home: home))
+            children(TemporaryBuildOutput.xcodeDerivedData(home: home)) +
+            DeviceSupportVersion.roots(home: home).flatMap(children)
         return found.filter { TemporaryBuildOutput.kind(of: $0, home: home) != nil }
     }
 
