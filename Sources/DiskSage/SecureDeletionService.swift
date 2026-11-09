@@ -47,7 +47,11 @@ struct CleanupService: Sendable {
              } else if candidate.deletionMode == .simulatorDevices {
                  try SimulatorCleanup.deleteDevices()
              } else {
-                 try CleanupActivity.capture().requireIdle(candidate.url)
+                 let activity = try CleanupActivity.capture()
+                 try activity.requireIdle(candidate.url)
+                 if TemporaryBuildOutput.kind(of: candidate.url) != nil {
+                     try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity)
+                 }
                  try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              }
          }, writeEvent: WriteEvent? = nil) {
