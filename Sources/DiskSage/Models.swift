@@ -46,7 +46,10 @@ enum RiskLevel: Int, Codable, Comparable, Sendable {
 enum DeletionMode: String, Codable, Sendable {
     case item
     case contents
+    /// Legacy "delete every simulator" mode. It is refused now.
     case simulatorDevices
+    /// One simulator device, deleted with `simctl delete <udid>`.
+    case simulatorDevice
     case generatedFiles
 }
 
