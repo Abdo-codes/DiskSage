@@ -43,7 +43,10 @@ struct GeneratedFileInventory: Sendable {
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Files changed after `cutoff` are never listed. With an activity scope, any entry
+    /// changed after `cutoff` also removes every file of its group from the inventory.
     static func read(_ root: URL, rule: GeneratedCleanupRule, cutoff: Date,
+                     activity scope: GeneratedActivityScope = .none,
                      maximumEntries: Int = 200_000) throws -> Self {
         let parts = CleanupPath.fileURL(root).pathComponents
         let fd = try SecureFileDeleter.openDirectoryChain(Array(parts.dropFirst()))
@@ -52,7 +55,8 @@ struct GeneratedFileInventory: Sendable {
         guard fstat(fd, &rootInfo) == 0, rootInfo.st_uid == getuid() else {
             throw FeatureFailure(message: "The generated folder is not owned by the current user.")
         }
-        var entries: [GeneratedFileEntry] = [], visited = 0
+        var entries: [GeneratedFileEntry] = [], visited = 0, activeGroups = Set<String>()
+        if let group = scope.group([]), !GeneratedFileStamp(rootInfo).isOlder(than: cutoff) { activeGroups.insert(group) }
         func walk(_ parent: Int32, _ relative: [String]) throws {
             try Task.checkCancellation()
             guard relative.count <= 128 else { throw FeatureFailure(message: "Generated-file inventory exceeded its depth limit.") }
@@ -82,6 +86,7 @@ struct GeneratedFileInventory: Sendable {
                     throw SecureDeletionError.systemCall("Inspecting generated files", errno)
                 }
                 guard info.st_dev == rootInfo.st_dev else { throw SecureDeletionError.crossedFilesystem(path.joined(separator: "/")) }
+                if let group = scope.group(path), !GeneratedFileStamp(info).isOlder(than: cutoff) { activeGroups.insert(group) }
                 guard info.st_uid == getuid() else { continue }
                 if info.st_mode & S_IFMT == S_IFDIR {
                     guard GeneratedCleanupPolicy.mayDescend(path) else { continue }
@@ -106,6 +111,9 @@ struct GeneratedFileInventory: Sendable {
             }
         }
         try walk(fd, [])
+        if !activeGroups.isEmpty {
+            entries.removeAll { scope.group($0.parts).map(activeGroups.contains) ?? false }
+        }
         return Self(rootIdentity: FileIdentity(device: UInt64(rootInfo.st_dev), inode: UInt64(rootInfo.st_ino)),
                     entries: entries.sorted { $0.path < $1.path })
     }

@@ -16,7 +16,8 @@ enum GeneratedFileDeleter {
                         policy: SafetyPolicy = SafetyPolicy(), maximumEntries: Int = 200_000) throws -> CleanupCandidate? {
         guard GeneratedCleanupScope.rule(for: root, home: policy.home) == rule else { return nil }
         try activity.requireIdle(root, rule: rule)
-        let inventory = try GeneratedFileInventory.read(root, rule: rule, cutoff: cutoff, maximumEntries: maximumEntries)
+        let inventory = try GeneratedFileInventory.read(root, rule: rule, cutoff: cutoff,
+            activity: GeneratedActivityScope.of(root, rule: rule, home: policy.home), maximumEntries: maximumEntries)
         guard inventory.bytes > 0 else { return nil }
         let snapshot = GeneratedCleanupSnapshot(rule: rule, cutoff: cutoff, digest: inventory.digest, fileCount: inventory.entries.count)
         let candidate = CleanupCandidate(url: CleanupPath.fileURL(root), name: name, category: category,
@@ -33,7 +34,8 @@ enum GeneratedFileDeleter {
         try policy.validate(candidate)
         guard let snapshot = candidate.generatedSnapshot else { throw SecureDeletionError.identityChanged }
         try activity().requireIdle(candidate.url, rule: snapshot.rule)
-        let inventory = try GeneratedFileInventory.read(candidate.url, rule: snapshot.rule, cutoff: snapshot.cutoff)
+        let inventory = try GeneratedFileInventory.read(candidate.url, rule: snapshot.rule, cutoff: snapshot.cutoff,
+            activity: GeneratedActivityScope.of(candidate.url, rule: snapshot.rule, home: policy.home))
         guard inventory.rootIdentity == candidate.identity, inventory.digest == snapshot.digest,
               inventory.entries.count == snapshot.fileCount, inventory.bytes == candidate.size else {
             throw SecureDeletionError.identityChanged

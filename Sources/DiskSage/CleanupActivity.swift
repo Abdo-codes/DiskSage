@@ -22,6 +22,8 @@ struct CleanupActivity: Sendable {
             }
         }
         guard !paths.isEmpty else { throw FeatureFailure(message: "Process activity was unavailable. Nothing was deleted.") }
+        // A build between compile steps has no open files in its output folder, but still names it.
+        paths.formUnion(try ProcessArgumentPaths.capture())
         return Self(paths: paths, commands: commands)
     }
 
