@@ -27,4 +27,16 @@ struct WorktreeRemoteDefaultTests {
         #expect(item.retainedRefs["refs/remotes/origin/main"] == (onDefault ? head : base))
         #expect(item.retainedRefs["refs/remotes/origin/topic"] == nil)
     }
+
+    @Test func removalSucceedsWithARetainedRemoteDefault() throws {
+        let f = try WorktreeFixture(); defer { f.dispose() }
+        let base = try f.git.text(f.main.path, ["rev-parse", "main"])
+        _ = try f.git.run(f.main.path, ["update-ref", "refs/remotes/origin/main", base])
+        _ = try f.git.run(f.main.path, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        let item = try f.inspect()
+        #expect(item.retainedRefs["refs/remotes/origin/main"] == base)
+        let results = try f.remove(WorktreePreview(items: [item]))
+        #expect(results.count == 1 && results[0].succeeded, "\(results)")
+        #expect(!FileManager.default.fileExists(atPath: f.checkout.path))
+    }
 }
