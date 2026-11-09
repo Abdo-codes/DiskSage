@@ -36,7 +36,8 @@ struct DiskScanner: Sendable {
         if locations == nil {
             let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { GeneratedBuildDiscovery().directories(under: $0) }
             let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: currentActivity, home: home)
-            wholeFolders = temporary.candidates + SimulatorInventory.candidates(activity: currentActivity, home: home)
+            wholeFolders = temporary.candidates + SimulatorInventory.candidates(activity: currentActivity, home: home) +
+                ToolCacheInventory.candidates(activity: currentActivity, home: home)
             seeds += temporary.generatedRoots.map {
                 Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
                     category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
