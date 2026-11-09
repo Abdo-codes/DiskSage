@@ -44,8 +44,8 @@ struct CleanupService: Sendable {
              try SafetyPolicy().validate(candidate)
              if candidate.deletionMode == .generatedFiles {
                  try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
-             } else if candidate.deletionMode == .simulatorDevices {
-                 try SimulatorCleanup.deleteDevices()
+             } else if candidate.deletionMode == .simulatorDevice {
+                 try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
              } else {
                  let activity = try CleanupActivity.capture()
                  try activity.requireIdle(candidate.url)
@@ -70,23 +70,6 @@ struct CleanupService: Sendable {
         continuation.finish()
         await reporting.value
         return report
-    }
-}
-
-enum SimulatorCleanup {
-    static func deleteDevices() throws {
-        for arguments in [["simctl", "shutdown", "all"], ["simctl", "delete", "all"]] {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            process.arguments = arguments
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 && arguments[1] == "delete" {
-                throw SecureDeletionError.simulatorCommandFailed(process.terminationStatus)
-            }
-        }
     }
 }
 

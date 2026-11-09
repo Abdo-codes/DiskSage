@@ -42,6 +42,20 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
+        if candidate.deletionMode == .simulatorDevices {
+            throw SafetyPolicyError.refused("DiskSage deletes simulators one device at a time. Scan again.")
+        }
+        if candidate.deletionMode == .simulatorDevice {
+            // simctl removes the folder. SimulatorInventory checks the state and activity again before deletion.
+            guard url.deletingLastPathComponent() == SimulatorInventory.devicesRoot(home: home),
+                  SimulatorDevice.isUDID(url.lastPathComponent),
+                  candidate.identity != FileIdentity(device: 0, inode: 0) else {
+                throw SafetyPolicyError.refused("A simulator candidate must be one device folder.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            return
+        }
         if TemporaryBuildOutput.kind(of: url, home: home) != nil {
             // Whole temporary build folders. Git data, age, sessions and activity are checked by
             // TemporaryBuildInspector when the candidate is made and again right before deletion.

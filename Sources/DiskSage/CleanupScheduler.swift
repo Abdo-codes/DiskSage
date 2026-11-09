@@ -95,6 +95,8 @@ struct CleanupScheduler {
 
     static func conflicts(_ lhs: CleanupCandidate, _ rhs: CleanupCandidate) -> Bool {
         if lhs.deletionMode == .simulatorDevices || rhs.deletionMode == .simulatorDevices { return true }
+        // CoreSimulator handles one delete at a time more reliably.
+        if lhs.deletionMode == .simulatorDevice && rhs.deletionMode == .simulatorDevice { return true }
         if lhs.identity.device != 0, lhs.identity == rhs.identity { return true }
         // Conservative on both case-sensitive and case-insensitive volumes; never resolve symlinks to schedule work.
         let a = lhs.url.standardizedFileURL.path.precomposedStringWithCanonicalMapping.lowercased()

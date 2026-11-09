@@ -6,7 +6,8 @@ extension CleanupCandidate {
         case .item: "Deletes this item and everything inside it."
         case .contents: "Deletes the contents; keeps the parent folder."
         case .generatedFiles: "Deletes only verified generated files from this scan. Source, test evidence, installed tool bundles, and the parent folder stay."
-        case .simulatorDevices: "Deletes all simulator devices, including installed apps and their data."
+        case .simulatorDevices: "Refused: DiskSage deletes simulators one device at a time."
+        case .simulatorDevice: "Deletes this one simulator device with simctl, including its installed apps and their data."
         }
     }
 }
