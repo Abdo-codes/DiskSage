@@ -50,6 +50,10 @@ struct FolderSurvey: Sendable {
     private static func newestDate(of url: URL) throws -> Date {
         var info = stat()
         guard lstat(url.path, &info) == 0 else { throw FeatureFailure(message: "A change date could not be read.") }
+        // A locked file cannot be deleted, and someone locked it on purpose.
+        guard info.st_flags & UInt32(UF_IMMUTABLE | SF_IMMUTABLE | UF_APPEND | SF_APPEND) == 0 else {
+            throw FeatureFailure(message: "The folder contains a locked file. DiskSage keeps it.")
+        }
         let seconds = [info.st_mtimespec, info.st_ctimespec, info.st_birthtimespec]
             .map { Double($0.tv_sec) + Double($0.tv_nsec) / 1e9 }.max() ?? 0
         return Date(timeIntervalSince1970: seconds)
