@@ -32,12 +32,14 @@ struct DiskScanner: Sendable {
         guard let currentActivity = try? activity() else { return [] }
         let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
         var seeds = locations ?? defaultLocations(home: home)
+        var wholeFolders: [CleanupCandidate] = []
         if locations == nil {
-            for root in GeneratedCleanupScope.discoveryRoots(home: home) {
-                seeds += GeneratedBuildDiscovery().directories(under: root).map {
-                    Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
-                        category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
-                }
+            let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { GeneratedBuildDiscovery().directories(under: $0) }
+            let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: currentActivity, home: home)
+            wholeFolders = temporary.candidates
+            seeds += temporary.generatedRoots.map {
+                Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
+                    category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
             }
         }
         var seen = Set<String>()
@@ -53,7 +55,7 @@ struct DiskScanner: Sendable {
             return inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
                            reason: seed.reason, deletionMode: seed.deletionMode)
         }
-        return validated(candidates).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+        return validated(candidates + wholeFolders).sorted { $0.size > $1.size }.prefix(100).map { $0 }
     }
 
     private static func defaultLocations(home: URL) -> [Location] {

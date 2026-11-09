@@ -42,6 +42,19 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
+        if TemporaryBuildOutput.kind(of: url, home: home) != nil {
+            // Whole temporary build folders. Git data, age, sessions and activity are checked by
+            // TemporaryBuildInspector when the candidate is made and again right before deletion.
+            guard candidate.deletionMode == .item else {
+                throw SafetyPolicyError.refused("Temporary build output is deleted only as a whole folder.")
+            }
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+                throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            return
+        }
         let exactTargets = [
             home.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
             home.appending(path: "Library/Developer/Xcode/Archives", directoryHint: .isDirectory),
