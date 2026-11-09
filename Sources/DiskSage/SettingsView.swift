@@ -46,6 +46,7 @@ struct SettingsView: View {
                         .onChange(of: cleanupThresholdGiB) { _, _ in model.store.send(.monitoringPreferencesChanged) }
                     LabeledContent("Last automatic cleanup", value: model.automaticCleanupSummary)
                 }
+                KeepRulesSettingsView()
             }
             .formStyle(.grouped)
             .padding(16)

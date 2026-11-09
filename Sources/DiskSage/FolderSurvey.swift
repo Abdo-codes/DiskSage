@@ -6,6 +6,9 @@ import Foundation
 struct FolderSurvey: Sendable {
     let bytes: Int64
     let newestChange: Date
+    /// Allocated bytes of video files. Agent folders can hold the only copy of a recording.
+    var mediaBytes: Int64 = 0
+    static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "webm", "avi"]
 
     func idle(at now: Date) -> TimeInterval { max(0, now.timeIntervalSince(newestChange)) }
 
@@ -22,7 +25,7 @@ struct FolderSurvey: Sendable {
             errorHandler: { _, _ in failed = true; return false }) else {
             throw FeatureFailure(message: "The folder could not be read.")
         }
-        var bytes: Int64 = 0, count = 0
+        var bytes: Int64 = 0, media: Int64 = 0, count = 0
         for case let url as URL in walker {
             try Task.checkCancellation()
             count += 1
@@ -34,10 +37,14 @@ struct FolderSurvey: Sendable {
             if let allowed = gitAllowedUnder, isGitData(url, values: values), !(parts.first.map(allowed.contains) ?? false) {
                 throw FeatureFailure(message: "The folder contains Git data. Review it with Git Worktrees instead.")
             }
-            if values.isRegularFile == true { bytes += Int64(values.totalFileAllocatedSize ?? 0) }
+            if values.isRegularFile == true {
+                let size = Int64(values.totalFileAllocatedSize ?? 0)
+                bytes += size
+                if videoExtensions.contains(url.pathExtension.lowercased()) { media += size }
+            }
         }
         guard !failed else { throw FeatureFailure(message: "Some files in the folder could not be read.") }
-        return Self(bytes: bytes, newestChange: newest)
+        return Self(bytes: bytes, newestChange: newest, mediaBytes: media)
     }
 
     private static func isGitData(_ url: URL, values: URLResourceValues) -> Bool {
