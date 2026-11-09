@@ -42,7 +42,11 @@ enum ScheduledFolderPolicy {
         return FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
     }
 
-    static func validate(_ schedule: CleanupSchedule) throws {
+    /// Runs at scan and again before deletion. Keep rules added after the schedule was authorized still apply.
+    static func validate(_ schedule: CleanupSchedule, keep: KeepRules = .current()) throws {
+        guard !keep.keeps(schedule.folder) else {
+            throw SafetyPolicyError.refused("A keep rule in Settings protects this folder or something inside it.")
+        }
         guard try identity(of: schedule.folder, scope: schedule.scope) == schedule.folderIdentity else {
             throw FeatureFailure(message: "The scheduled folder was replaced. Choose it again to authorize the new folder.")
         }

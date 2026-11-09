@@ -6,6 +6,8 @@ struct WorktreeInspector: Sendable {
     var processPaths: [String]?
     enum SharedObjectCheck: Sendable { case passed, failed(FeatureFailure) }
     var sharedObjectChecks: [String: SharedObjectCheck] = [:]
+    /// Nil reads the current Settings on each inspection, so removal sees rules added after the review.
+    var keep: KeepRules?
 
     func inspect(_ worktree: GitWorktree, configuration: WorktreeConfiguration) -> WorktreeInspection {
         var value = WorktreeInspection(worktree: worktree)
@@ -15,6 +17,7 @@ struct WorktreeInspector: Sendable {
             if worktree.locked { value.blockers.append("Git worktree is locked.") }
             if worktree.missing { value.blockers.append("Missing registration: metadata only; no disk savings claimed."); return value }
             if configuration.protectedIDs.contains(value.id) { value.blockers.append("Kept by DiskSage protection.") }
+            if (keep ?? .current()).keeps(URL(fileURLWithPath: path)) { value.blockers.append("A keep rule in Settings protects this checkout.") }
             if !configuration.roots.contains(where: { WorktreePathGuard.contains($0, path) }) { value.blockers.append("Outside approved folders. Add its folder explicitly.") }
             let identity = try WorktreePathGuard.identity(path)
             let marker = URL(fileURLWithPath: path + "/.git")

@@ -63,4 +63,24 @@ struct KeepRulesTests {
             try TemporaryBuildInspector.verifyBeforeDeletion(plain, activity: .idle, now: f.later(hours: 200), home: f.base)
         }
     }
+
+    @Test func schedulesRefuseFoldersThatHoldAKeptPath() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let folder = try f.folder("Downloads/inbox")
+        try f.write("Downloads/inbox/reference.mov")
+        let schedule = CleanupSchedule(folder: folder, folderIdentity: try ScheduledFolderPolicy.identity(of: folder),
+                                       scope: .folderContents)
+        try ScheduledFolderPolicy.validate(schedule, keep: KeepRules())
+        #expect(throws: (any Error).self) {
+            try ScheduledFolderPolicy.validate(schedule, keep: KeepRules(paths: [folder.path + "/reference.mov"]))
+        }
+    }
+
+    @Test func keptCheckoutsAreBlocked() throws {
+        let f = try WorktreeFixture(); defer { f.dispose() }
+        let inspector = WorktreeInspector(checkActivity: false, keep: KeepRules(paths: [f.checkout.path]))
+        let item = inspector.inspect(try f.item(), configuration: f.configuration)
+        #expect(item.blockers.contains("A keep rule in Settings protects this checkout."))
+        #expect(!item.canRemove)
+    }
 }
