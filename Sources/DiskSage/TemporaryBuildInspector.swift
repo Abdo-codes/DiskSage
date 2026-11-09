@@ -13,7 +13,7 @@ enum TemporaryBuildInspector {
     /// Nothing inside a live Claude session is offered, not even compiled files.
     static func scan(discovered: [URL], activity: CleanupActivity, now: Date = Date(),
                      home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                     extraFolders: () -> [URL] = { looseBundles() + ClaudeSessionActivity.scratchpads() }) -> ScanResult {
+                     extraFolders: () -> [URL] = { looseBundles() + ClaudeSessionActivity.scratchpads() + AgentWorkspaceDiscovery.folders() }) -> ScanResult {
         let sessions = ClaudeSessionActivity.Cache(activity: activity, now: now)
         var result = ScanResult()
         for url in discovered where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
@@ -28,6 +28,8 @@ enum TemporaryBuildInspector {
         for url in extraFolders() where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
             if let candidate = inspect(url, activity: activity, now: now, home: home) { result.candidates.append(candidate) }
         }
+        var unique = Set<String>()
+        result.candidates.removeAll { !unique.insert(CleanupPath.fileURL($0.url).path).inserted }
         // A whole folder already covers everything inside it: offer each file once.
         let wholes = result.candidates.map { CleanupPath.fileURL($0.url).path }
         func covered(_ url: URL) -> Bool {
@@ -95,6 +97,6 @@ enum TemporaryBuildInspector {
     }
 
     private static func survey(_ url: URL, kind: TemporaryBuildOutput.Kind) throws -> FolderSurvey {
-        try FolderSurvey.read(url, gitAllowedUnder: kind == .derivedData ? ["SourcePackages"] : [])
+        try FolderSurvey.read(url, gitAllowedUnder: TemporaryBuildOutput.gitAllowedUnder(kind))
     }
 }
