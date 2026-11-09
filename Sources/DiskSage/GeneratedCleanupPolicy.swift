@@ -10,6 +10,9 @@ struct GeneratedCleanupSnapshot: Codable, Hashable, Sendable {
     let cutoff: Date
     let digest: String
     let fileCount: Int
+    /// True when the scan also offered idle DerivedData projects as whole folders, so their files were left out.
+    /// Deletion reads the inventory the same way. Missing in older snapshots, which means false.
+    var handsOffWholeFolders: Bool? = nil
 }
 
 enum GeneratedCleanupPolicy {

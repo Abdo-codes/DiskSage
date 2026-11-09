@@ -47,6 +47,7 @@ struct GeneratedFileInventory: Sendable {
     /// changed after `cutoff` also removes every file of its group from the inventory.
     static func read(_ root: URL, rule: GeneratedCleanupRule, cutoff: Date,
                      activity scope: GeneratedActivityScope = .none,
+                     handsOff: (URL) -> Bool = { _ in false },
                      maximumEntries: Int = 200_000) throws -> Self {
         let parts = CleanupPath.fileURL(root).pathComponents
         let fd = try SecureFileDeleter.openDirectoryChain(Array(parts.dropFirst()))
@@ -113,6 +114,13 @@ struct GeneratedFileInventory: Sendable {
         try walk(fd, [])
         if !activeGroups.isEmpty {
             entries.removeAll { scope.group($0.parts).map(activeGroups.contains) ?? false }
+        }
+        // In Xcode's shared DerivedData, a project folder that the whole-folder rule accepts goes to that rule.
+        // Files of every other folder stay here, so one of the two rules always offers them.
+        if scope == .perChild {
+            let projects = Set(entries.compactMap(\.parts.first).filter(TemporaryBuildOutput.isXcodeProjectFolderName))
+            let handed = projects.filter { handsOff(CleanupPath.fileURL(root.appending(path: $0, directoryHint: .isDirectory))) }
+            if !handed.isEmpty { entries.removeAll { $0.parts.first.map(handed.contains) ?? false } }
         }
         return Self(rootIdentity: FileIdentity(device: UInt64(rootInfo.st_dev), inode: UInt64(rootInfo.st_ino)),
                     entries: entries.sorted { $0.path < $1.path })

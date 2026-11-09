@@ -7,7 +7,8 @@ import Foundation
 enum AgentWorkspaceDiscovery {
     static func folders(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let home = CleanupPath.fileURL(home)
-        let found = codexDays(home: home) + topLevel() + taskBundles(home: home)
+        let found = codexDays(home: home) + topLevel() + taskBundles(home: home) +
+            children(TemporaryBuildOutput.xcodeDerivedData(home: home))
         return found.filter { TemporaryBuildOutput.kind(of: $0, home: home) != nil }
     }
 
