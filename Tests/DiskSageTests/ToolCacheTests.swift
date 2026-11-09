@@ -8,13 +8,17 @@ private final class FakeTool: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var calls: [(String, [String], [String: String])] = []
     let code: Int32
-    init(code: Int32 = 0) { self.code = code }
+    let dryRun: String
+    init(code: Int32 = 0, dryRun: String = "==> This operation would free approximately 1.5GB of disk space.") {
+        self.code = code; self.dryRun = dryRun
+    }
     var run: ToolCacheInventory.Run {
         { [self] executable, arguments, environment in
             lock.withLock { calls.append((executable, arguments, environment)) }
-            return code
+            return (code, Data((arguments.contains("--dry-run") ? dryRun : "").utf8))
         }
     }
+    var commands: [[String]] { lock.withLock { calls.map(\.1).filter { !$0.contains("--dry-run") } } }
 }
 
 /// The fixture folder stands in for the home folder.
@@ -28,14 +32,20 @@ struct ToolCacheTests {
         try f.write(".cache/uv/wheels-v5/a.whl")
         let brew = CleanupPath.fileURL(f.base.appending(path: "Library/Caches/Homebrew"))
         // uv is not installed: only the Homebrew cache is offered.
-        let found = ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew, size: big)
+        let found = ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew, run: FakeTool().run, size: big)
         #expect(found.map(\.url) == [brew])
+        // The estimate comes from Homebrew's own dry run, not from the folder size.
+        #expect(found.first?.size == 1_500_000_000)
+        let nothing = FakeTool(dryRun: "")
+        #expect(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew, run: nothing.run, size: big).isEmpty)
+        #expect(nothing.commands.isEmpty)
         #expect(found.allSatisfy { $0.risk == .low && $0.deletionMode == .toolCommand && $0.category == .cache })
         try SafetyPolicy(home: f.base).validate(try #require(found.first))
         // Small caches and caches in use are not offered.
-        #expect(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew, size: { _ in 4_096 }).isEmpty)
+        #expect(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: onlyBrew,
+            run: FakeTool(dryRun: "would free approximately 12KB of disk space").run, size: big).isEmpty)
         let busy = CleanupActivity(paths: [brew.path + "/downloads/a.tar.gz"])
-        #expect(ToolCacheInventory.candidates(activity: busy, home: f.base, trusted: onlyBrew, size: big).isEmpty)
+        #expect(ToolCacheInventory.candidates(activity: busy, home: f.base, trusted: onlyBrew, run: FakeTool().run, size: big).isEmpty)
     }
 
     @Test func cleanRunsOnlyTheToolsOwnCommand() throws {
@@ -43,7 +53,9 @@ struct ToolCacheTests {
         try f.write(".cache/uv/wheels-v5/a.whl")
         let uv = CleanupPath.fileURL(f.base.appending(path: ".cache/uv"))
         let trusted: ToolCacheInventory.Trusted = { $0 == "/opt/homebrew/bin/uv" }
-        let candidate = try #require(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted, size: big).first)
+        let candidate = try #require(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted,
+                                                                   run: FakeTool().run, size: big).first)
+        #expect(candidate.size == 200 * 1_048_576)
         let tool = FakeTool()
         try ToolCacheInventory.clean(candidate, activity: .idle, home: f.base, trusted: trusted, run: tool.run)
         #expect(tool.calls.count == 1)
@@ -59,6 +71,12 @@ struct ToolCacheTests {
             try ToolCacheInventory.clean(candidate, activity: .idle, home: f.base, trusted: trusted, run: FakeTool(code: 1).run)
         }
         #expect(tool.calls.count == 1)
+    }
+
+    @Test func readsTheHomebrewDryRunSummary() {
+        #expect(ToolCache.freedBytes(fromDryRun: "Would remove: /x (1MB)\n==> This operation would free approximately 2.3GB of disk space.") == 2_300_000_000)
+        #expect(ToolCache.freedBytes(fromDryRun: "would free approximately 512B of disk space") == 512)
+        #expect(ToolCache.freedBytes(fromDryRun: "") == 0)
     }
 
     @Test func otherFoldersAreRefused() throws {
