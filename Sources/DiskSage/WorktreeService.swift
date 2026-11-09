@@ -133,7 +133,8 @@ struct WorktreeService: Sendable {
                 guard !remaining.contains(where: { $0.id == current.id }), !FileManager.default.fileExists(atPath: path) else {
                     throw FeatureFailure(message: "Git returned but the checkout/registration remains. Review the partial result; no retry was made.")
                 }
-                let refLines = try inspector.git.text(current.commonDirectory, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"])
+                // Remote default branches are retained too (see WorktreeInspector), so read remote refs as well.
+                let refLines = try inspector.git.text(current.commonDirectory, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags", "refs/remotes"])
                 let retained = Dictionary(uniqueKeysWithValues: refLines.split(separator: "\n").compactMap { line -> (String, String)? in
                     let fields = line.split(separator: " ", maxSplits: 1)
                     return fields.count == 2 ? (String(fields[0]), String(fields[1])) : nil

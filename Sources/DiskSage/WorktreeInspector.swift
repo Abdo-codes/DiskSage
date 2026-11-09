@@ -98,8 +98,29 @@ struct WorktreeInspector: Sendable {
             guard pair.count == 2 else { throw FeatureFailure(message: "Incomplete shared reference.") }
             value.retainedRefs[String(pair[0])] = String(pair[1])
         }
-        guard value.retainedRefs.count <= 500 else { throw FeatureFailure(message: "Too many shared references for bounded preservation review.") }
-        let unretained = try git.text(path, ["rev-list", "--max-count=1", "HEAD", "--not", "--branches", "--tags"])
+        // A remote's default branch (the target of `refs/remotes/<remote>/HEAD`) is never deleted after a merge,
+        // so its commits count as kept. Other remote branches are pruned after a merge, so they do not count.
+        // Only `refs/remotes/<remote>/HEAD` of a configured remote names a default branch; other symbolic
+        // remote refs are aliases. Remote names can contain slashes, so they come from the configuration.
+        let heads = Set(try git.text(path, ["remote"]).split(separator: "\n").map { "refs/remotes/\($0)/HEAD" })
+        let defaults = Set(try git.text(path, ["for-each-ref", "--format=%(refname) %(symref)", "refs/remotes"])
+            .split(separator: "\n").compactMap { line -> String? in
+                let pair = line.split(separator: " ", maxSplits: 1).map(String.init)
+                guard pair.count == 2, pair[1].hasPrefix("refs/remotes/"), heads.contains(pair[0]) else { return nil }
+                return pair[1]
+            })
+        // A dangling `<remote>/HEAD` resolves to nothing, so only refs that exist are used.
+        var kept: [String] = []
+        if !defaults.isEmpty {
+            let resolved = try git.text(path, ["for-each-ref", "--format=%(refname) %(objectname)"] + defaults.sorted())
+            for line in resolved.split(separator: "\n") {
+                let pair = line.split(separator: " ", maxSplits: 1)
+                guard pair.count == 2 else { throw FeatureFailure(message: "Incomplete remote reference.") }
+                value.retainedRefs[String(pair[0])] = String(pair[1])
+                kept.append(String(pair[0]))
+            }
+        }
+        let unretained = try git.text(path, ["rev-list", "--max-count=1", "HEAD", "--not", "--branches", "--tags"] + kept)
         if !unretained.isEmpty { value.removalWarnings?.append("Detached HEAD commits lack a retained local branch or tag and may become unrecoverable.") }
         var tips = Set(try git.text(path, ["reflog", "show", "--format=%H", "HEAD"]).split(separator: "\n").map(String.init))
         tips.formUnion(extraTips)
@@ -109,7 +130,7 @@ struct WorktreeInspector: Sendable {
         guard tips.allSatisfy({ $0.utf8.count == value.worktree.head.utf8.count && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) } }) else {
             throw FeatureFailure(message: "Malformed recovery object ID; preservation could not be verified.")
         }
-        let recoveryUnretained = try !tips.isEmpty && !git.text(path, ["rev-list", "--max-count=1"] + tips.sorted() + ["--not", "--branches", "--tags"]).isEmpty
+        let recoveryUnretained = try !tips.isEmpty && !git.text(path, ["rev-list", "--max-count=1"] + tips.sorted() + ["--not", "--branches", "--tags"] + kept).isEmpty
         if recoveryUnretained {
             value.removalWarnings?.append("Worktree recovery history contains commits without a retained local branch/tag; removing its recovery log may make them unrecoverable.")
         }
