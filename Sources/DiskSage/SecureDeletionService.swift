@@ -41,6 +41,9 @@ struct CleanupService: Sendable {
 
     init(logger: CleanupLogger = .shared, maximumWorkers: Int = 4,
          remove: @escaping Remove = { candidate, entryRemoved in
+             // Read the kind before the policy check. A folder that stops matching after the check,
+             // such as older device symbols whose newer version was deleted, still gets the full check and fails it.
+             let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url) != nil
              try SafetyPolicy().validate(candidate)
              if candidate.deletionMode == .generatedFiles {
                  try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
@@ -49,7 +52,7 @@ struct CleanupService: Sendable {
              } else {
                  let activity = try CleanupActivity.capture()
                  try activity.requireIdle(candidate.url)
-                 if TemporaryBuildOutput.kind(of: candidate.url) != nil {
+                 if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url) != nil {
                      try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity)
                  }
                  try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)

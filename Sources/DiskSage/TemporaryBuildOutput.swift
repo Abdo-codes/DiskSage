@@ -22,6 +22,8 @@ enum TemporaryBuildOutput {
         case codexSessionDay
         /// One project folder in Xcode's DerivedData: `<Project>-<28 letters>`.
         case xcodeProjectBuild
+        /// Device symbols for an older OS version, when a newer version for the same device is present.
+        case olderDeviceSupport
     }
 
     static func xcodeDerivedData(home: URL) -> URL {
@@ -57,6 +59,9 @@ enum TemporaryBuildOutput {
         if url.deletingLastPathComponent() == xcodeDerivedData(home: home) {
             return isXcodeProjectFolderName(url.lastPathComponent) &&
                 isRegularFile(url.appending(path: "info.plist")) ? .xcodeProjectBuild : nil
+        }
+        if DeviceSupportVersion.roots(home: home).map(\.path).contains(url.deletingLastPathComponent().path) {
+            return DeviceSupportVersion.isSuperseded(url) ? .olderDeviceSupport : nil
         }
         let claude = claudeRoot.pathComponents
         let documents = derivedDataRoots(home: home)[1].pathComponents
@@ -140,11 +145,13 @@ enum TemporaryBuildOutput {
         case .codexSessionDay: idle >= 7 * day ? .medium : nil
         // The compiled-files rule hands a project over after one day. Xcode rebuilds it, but that takes time.
         case .xcodeProjectBuild: idle >= 3 * day ? .low : (idle >= day ? .medium : nil)
+        // Xcode copies the symbols again when a device with that version connects.
+        case .olderDeviceSupport: idle >= day ? .low : nil
         }
     }
 
     static func category(_ kind: Kind) -> CandidateCategory {
-        [.scratchpad, .codexVisualizationDay, .codexSessionDay].contains(kind) ? .cache : .build
+        [.scratchpad, .codexVisualizationDay, .codexSessionDay, .olderDeviceSupport].contains(kind) ? .cache : .build
     }
 
     static func reason(_ kind: Kind, idle: TimeInterval) -> String {
@@ -166,6 +173,8 @@ enum TemporaryBuildOutput {
             return "One day of Codex session transcripts with no changes for \(age). You cannot resume these sessions after deletion."
         case .xcodeProjectBuild:
             return "Xcode DerivedData for one project with no changes for \(age). The whole folder is deleted; Xcode builds it again."
+        case .olderDeviceSupport:
+            return "Device symbols for an older OS version. A newer version for this device stays. Xcode copies them again if a device with this version connects."
         }
     }
 
