@@ -13,6 +13,17 @@ struct GeneratedCleanupSnapshot: Codable, Hashable, Sendable {
     /// True when the scan also offered idle DerivedData projects as whole folders, so their files were left out.
     /// Deletion reads the inventory the same way. Missing in older snapshots, which means false.
     var handsOffWholeFolders: Bool? = nil
+    /// Sorted 8-byte fingerprints of the scanned files. With them, a deletion removes only the files that did not change.
+    /// Missing in older snapshots, which means the whole folder must match the scan.
+    var entryFingerprints: Data? = nil
+
+    /// The fingerprints as a set, or nil when the snapshot has none or they do not match `fileCount`.
+    var knownEntries: Set<UInt64>? {
+        guard let entryFingerprints, entryFingerprints.count == fileCount * MemoryLayout<UInt64>.size else { return nil }
+        return entryFingerprints.withUnsafeBytes { raw in
+            Set((0..<fileCount).map { raw.loadUnaligned(fromByteOffset: $0 * 8, as: UInt64.self) })
+        }
+    }
 }
 
 enum GeneratedCleanupPolicy {

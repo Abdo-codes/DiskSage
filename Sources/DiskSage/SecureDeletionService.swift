@@ -32,7 +32,8 @@ typealias CleanupAction = @Sendable ([CleanupCandidate], CleanupTrigger,
 
 struct CleanupService: Sendable {
     // A remover calls entryRemoved synchronously on its own worker. It must not retain the callback.
-    typealias Remove = @Sendable (CleanupCandidate, @escaping @Sendable () -> Void) throws -> Void
+    // A remover returns nil when it removed the candidate as scanned, or what it really removed.
+    typealias Remove = @Sendable (CleanupCandidate, @escaping @Sendable () -> Void) throws -> CleanupRemoval?
     typealias WriteEvent = @Sendable (CleanupLogEvent) throws -> Void
     let logger: CleanupLogger
     let maximumWorkers: Int
@@ -46,7 +47,7 @@ struct CleanupService: Sendable {
              let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url) != nil
              try SafetyPolicy().validate(candidate)
              if candidate.deletionMode == .generatedFiles {
-                 try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
+                 return try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              } else if candidate.deletionMode == .simulatorDevice {
                  try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
              } else if candidate.deletionMode == .toolCommand {
@@ -59,6 +60,7 @@ struct CleanupService: Sendable {
                  }
                  try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              }
+             return nil
          }, writeEvent: WriteEvent? = nil) {
         self.logger = logger
         self.maximumWorkers = min(4, max(1, maximumWorkers))

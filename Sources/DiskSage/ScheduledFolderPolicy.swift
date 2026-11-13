@@ -108,11 +108,11 @@ enum ScheduledFolderPolicy {
             }
             try validate(current)
             if current.scope == .lowRisk {
-                try GeneratedFileDeleter.delete(candidate, entryRemoved: removed)
-            } else {
-                try CleanupActivity.capture().requireIdle(candidate.url)
-                try SecureFileDeleter.delete(candidate, entryRemoved: removed)
+                return try GeneratedFileDeleter.delete(candidate, entryRemoved: removed)
             }
+            try CleanupActivity.capture().requireIdle(candidate.url)
+            try SecureFileDeleter.delete(candidate, entryRemoved: removed)
+            return nil
         })
         return await service.delete(candidates, trigger: .scheduled, progress: progress)
     }

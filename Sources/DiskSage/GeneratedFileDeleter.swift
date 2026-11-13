@@ -23,7 +23,8 @@ enum GeneratedFileDeleter {
             maximumEntries: maximumEntries)
         guard inventory.bytes > 0 else { return nil }
         let snapshot = GeneratedCleanupSnapshot(rule: rule, cutoff: cutoff, digest: inventory.digest, fileCount: inventory.entries.count,
-                                                handsOffWholeFolders: handsOffWholeFolders ? true : nil)
+                                                handsOffWholeFolders: handsOffWholeFolders ? true : nil,
+                                                entryFingerprints: inventory.fingerprints)
         let candidate = CleanupCandidate(url: CleanupPath.fileURL(root), name: name, category: category,
             size: inventory.bytes, risk: .low,
             reason: "\(snapshot.fileCount) verified generated files. Recent files, source, test evidence, installed dependencies and session data stay.",
@@ -38,9 +39,11 @@ enum GeneratedFileDeleter {
         return { TemporaryBuildInspector.inspect($0, activity: activity, now: now, home: home) != nil }
     }
 
+    /// Removes the scanned files that are still unchanged. Files that are new, changed or gone since the scan stay.
+    @discardableResult
     static func delete(_ candidate: CleanupCandidate, policy: SafetyPolicy = SafetyPolicy(),
                        activity: Activity = { try CleanupActivity.capture() },
-                       beforeEntry: (Int) throws -> Void = { _ in }, entryRemoved: () -> Void) throws {
+                       beforeEntry: (Int) throws -> Void = { _ in }, entryRemoved: () -> Void) throws -> CleanupRemoval {
         try policy.validate(candidate)
         guard let snapshot = candidate.generatedSnapshot else { throw SecureDeletionError.identityChanged }
         let current = try activity()
@@ -49,15 +52,13 @@ enum GeneratedFileDeleter {
             activity: GeneratedActivityScope.of(candidate.url, rule: snapshot.rule, home: policy.home),
             handsOff: snapshot.handsOffWholeFolders == true
                 ? wholeFolderRule(activity: current, cutoff: snapshot.cutoff, home: policy.home) : { _ in false })
-        guard inventory.rootIdentity == candidate.identity, inventory.digest == snapshot.digest,
-              inventory.entries.count == snapshot.fileCount, inventory.bytes == candidate.size else {
-            throw SecureDeletionError.identityChanged
-        }
+        guard inventory.rootIdentity == candidate.identity else { throw SecureDeletionError.identityChanged }
+        let entries = try unchangedEntries(inventory, snapshot: snapshot, size: candidate.size)
         try activity().requireIdle(candidate.url, rule: snapshot.rule)
         var removedBytes: Int64 = 0, removedFiles = 0
         var lastActivityCheck = Date()
         do {
-            for (index, entry) in inventory.entries.enumerated() {
+            for (index, entry) in entries.enumerated() {
                 try Task.checkCancellation()
                 try beforeEntry(index)
                 if index > 0 && Date().timeIntervalSince(lastActivityCheck) >= 2 {
@@ -80,6 +81,20 @@ enum GeneratedFileDeleter {
             guard removedFiles > 0 else { throw error }
             throw PartialCleanupFailure(removedBytes: removedBytes, removedFiles: removedFiles, reason: error.localizedDescription)
         }
+        return CleanupRemoval(removedBytes: removedBytes, skippedFiles: snapshot.fileCount - entries.count)
+    }
+
+    /// The fresh entries that the scan also listed with the same path and stamp.
+    /// A snapshot without fingerprints needs the whole inventory to match, as before.
+    private static func unchangedEntries(_ inventory: GeneratedFileInventory, snapshot: GeneratedCleanupSnapshot,
+                                         size: Int64) throws -> [GeneratedFileEntry] {
+        if inventory.digest == snapshot.digest, inventory.entries.count == snapshot.fileCount, inventory.bytes == size {
+            return inventory.entries
+        }
+        guard let known = snapshot.knownEntries else { throw SecureDeletionError.identityChanged }
+        let entries = inventory.entries.filter { known.contains($0.fingerprint) }
+        guard !entries.isEmpty, entries.count <= snapshot.fileCount else { throw SecureDeletionError.identityChanged }
+        return entries
     }
 
     private static func verifiedParent(_ candidate: CleanupCandidate, parts: [String]) throws -> Int32 {

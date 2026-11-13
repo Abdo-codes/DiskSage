@@ -69,20 +69,21 @@ struct GeneratedCleanupTests {
     }
 
     @Test(arguments: ["modified", "added", "replaced"])
-    func changedInventoryRefusesEntireTarget(scenario: String) throws {
+    func changedInventoryKeepsFilesTheScanDidNotShow(scenario: String) throws {
         let f = try GeneratedCleanupFixture(); defer { f.remove() }
         let first = try f.write("debug/a.o")
         try f.write("debug/b.o")
         let target = try #require(try f.candidate())
+        let kept: String
         switch scenario {
-        case "modified": try Data("changed".utf8).write(to: first)
-        case "added": try f.write("debug/c.o")
+        case "modified": try Data("changed".utf8).write(to: first); kept = "debug/a.o"
+        case "added": try f.write("debug/c.o"); kept = "debug/c.o"
         default:
             try FileManager.default.moveItem(at: first, to: f.home.appending(path: "old"))
-            try f.write("debug/a.o")
+            try f.write("debug/a.o"); kept = "debug/a.o"
         }
-        #expect(throws: (any Error).self) { try f.delete(target) }
-        #expect(f.exists("debug/a.o") && f.exists("debug/b.o"))
+        try f.delete(target)
+        #expect(f.exists(kept) && !f.exists("debug/b.o"))
     }
 
     @Test func activityBeforeDeletionAndFailedActivityScanRefuseCleanup() async throws {

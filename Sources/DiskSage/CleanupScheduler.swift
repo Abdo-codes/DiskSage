@@ -46,8 +46,9 @@ struct CleanupScheduler {
                                 let counter = CleanupEntryCounter { entries.record(index: index, count: $0) }
                                 let result: CleanupItemResult
                                 do {
-                                    try service.remove(candidate) { counter.recordRemoved() }
-                                    result = CleanupItemResult(candidate: candidate, removedBytes: candidate.size, errorDescription: nil)
+                                    let removal = try service.remove(candidate) { counter.recordRemoved() }
+                                    result = CleanupItemResult(candidate: candidate, removedBytes: removal?.removedBytes ?? candidate.size,
+                                                               errorDescription: nil, note: removal?.note)
                                 } catch let error as PartialCleanupFailure {
                                     result = CleanupItemResult(candidate: candidate, removedBytes: error.removedBytes, errorDescription: error.localizedDescription)
                                 } catch {
@@ -67,7 +68,7 @@ struct CleanupScheduler {
                 do {
                     try service.writeEvent(CleanupLogEvent(runID: runID, trigger: trigger, event: .itemFinished,
                         path: completed.result.candidate.url.path, name: completed.result.candidate.name,
-                        succeeded: completed.result.succeeded, message: completed.result.errorDescription,
+                        succeeded: completed.result.succeeded, message: completed.result.errorDescription ?? completed.result.note,
                         estimatedRemovedBytes: completed.result.removedBytes))
                 } catch { if loggingError == nil { loggingError = logFailure(error) } }
             }
