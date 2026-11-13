@@ -71,13 +71,7 @@ struct WorktreeInspector: Sendable {
             value.ignoredFiles = manifest.ignoredFiles
             value.removalWarnings?.append(contentsOf: manifest.nested.map { "Nested Git repository data will be deleted, including its branches and unsaved work: \($0)." })
             if checkActivity {
-                let paths: [String]
-                if let processPaths { paths = processPaths }
-                else {
-                    let output = try git.execute("/usr/sbin/lsof", ["-nP", "-d", "cwd,txt", "-F0pn"])
-                    guard output.code == 0 else { throw FeatureFailure(message: "Process activity could not be checked.") }
-                    paths = try WorktreeActivity.paths(output.data)
-                }
+                let paths = try processPaths ?? WorktreeActivity.capture(git)
                 let active = paths.contains { WorktreePathGuard.contains(path, $0) }
                 value.activity = "No matching process directory or executable observed; other editor/agent activity is unknown."
                 if active { value.blockers.append("A process is using this checkout. Stop it before removal."); value.activity = "Known process activity observed." }

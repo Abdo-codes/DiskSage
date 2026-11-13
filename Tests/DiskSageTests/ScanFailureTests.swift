@@ -73,4 +73,9 @@ struct ScanFailureTests {
         let activity = try CleanupActivity.capture()
         #expect(!activity.paths.isEmpty)
     }
+
+    @Test func liveWorktreeActivityCaptureWorksOnThisMac() throws {
+        // The worktree check uses its own lsof call. It had the same 8 MB limit.
+        #expect(try !WorktreeActivity.capture(WorktreeGitProcess()).isEmpty)
+    }
 }

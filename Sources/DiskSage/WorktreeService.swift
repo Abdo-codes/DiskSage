@@ -24,9 +24,7 @@ struct WorktreeService: Sendable {
         var result = WorktreeInventory(), repositories = Set<String>()
         var scanner = inspector
         if inspector.checkActivity, !roots.isEmpty {
-            let output = try inspector.git.execute("/usr/sbin/lsof", ["-nP", "-d", "cwd,txt", "-F0pn"])
-            guard output.code == 0 else { throw FeatureFailure(message: "Process activity could not be checked.") }
-            scanner.processPaths = try WorktreeActivity.paths(output.data)
+            scanner.processPaths = try WorktreeActivity.capture(inspector.git)
         }
         for root in roots {
             do {
