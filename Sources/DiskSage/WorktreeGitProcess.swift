@@ -49,6 +49,8 @@ struct WorktreeGitProcess: Sendable {
         try? pipe.fileHandleForWriting.close()
         let buffer = ProcessOutputBuffer()
         let reader = pipe.fileHandleForReading
+        // Close the read end on each path. Without this, each run kept one descriptor open until the app had none left.
+        defer { try? reader.close() }
         // Its own thread: a blocked read must not hold a thread of the shared dispatch pool.
         Thread.detachNewThread {
             while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty { buffer.append(chunk) }
@@ -63,7 +65,6 @@ struct WorktreeGitProcess: Sendable {
                 usleep(100_000)
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                 process.waitUntilExit()
-                try? reader.close()
                 throw FeatureFailure(message: tooLarge ? "\(name) exceeded its output limit."
                     : "\(name) was cancelled or exceeded its time limit.")
             }
@@ -72,7 +73,6 @@ struct WorktreeGitProcess: Sendable {
         process.waitUntilExit()
         // A child that keeps the pipe open must not block the result.
         let complete = buffer.wait(seconds: 2)
-        if !complete { try? reader.close() }
         guard complete, buffer.count <= outputLimit else { throw FeatureFailure(message: "\(name) exceeded its output limit.") }
         return Output(data: buffer.data, code: process.terminationStatus)
     }
