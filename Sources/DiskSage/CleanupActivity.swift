@@ -8,7 +8,7 @@ struct CleanupActivity: Sendable {
 
     static func capture() throws -> Self {
         // A busy developer Mac prints more than 20 MB here, so the default limit is too small.
-        let output = try WorktreeGitProcess().execute("/usr/sbin/lsof", ["-nP", "-F0pcn"], outputLimit: 256_000_000)
+        let output = try WorktreeGitProcess().execute("/usr/sbin/lsof", ["-nP", "-F0pcn"], outputLimit: WorktreeActivity.lsofOutputLimit)
         guard output.code == 0 else { throw FeatureFailure(message: "Active files could not be checked. Nothing was deleted.") }
         var pid: Int32?, paths = Set<String>(), commands = Set<String>(), rawPaths = Set<Data>()
         for raw in output.data.split(separator: 0) {

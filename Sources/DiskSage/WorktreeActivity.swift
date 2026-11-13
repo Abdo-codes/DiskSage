@@ -1,6 +1,16 @@
 import Foundation
 
 enum WorktreeActivity {
+    /// A Mac with many open files gives more than 8 MB of lsof output. A cut list would hide an active process.
+    static let lsofOutputLimit = 256_000_000
+
+    /// The working directories and executables of all processes.
+    static func capture(_ git: WorktreeGitProcess) throws -> [String] {
+        let output = try git.execute("/usr/sbin/lsof", ["-nP", "-d", "cwd,txt", "-F0pn"], outputLimit: lsofOutputLimit)
+        guard output.code == 0 else { throw FeatureFailure(message: "Process activity could not be checked.") }
+        return try paths(output.data)
+    }
+
     /// lsof escapes control characters and, under the C locale, each non-ASCII byte.
     static func paths(_ output: Data) throws -> [String] {
         try output.split(separator: 0).filter { $0.starts(with: [110, 47]) }.map { field in

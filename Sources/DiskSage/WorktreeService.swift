@@ -10,6 +10,8 @@ struct WorktreeService: Sendable {
     var inspector = WorktreeInspector()
     var repository = WorktreeRepository.standard
     var logger = CleanupLogger.shared
+    /// The largest number of folders that discovery opens under one approved folder.
+    var discoveryFolderLimit = 200_000
 
     func inventory(_ configuration: WorktreeConfiguration, repositoryRoot: String? = nil) throws -> WorktreeInventory {
         let roots: [String]
@@ -24,9 +26,7 @@ struct WorktreeService: Sendable {
         var result = WorktreeInventory(), repositories = Set<String>()
         var scanner = inspector
         if inspector.checkActivity, !roots.isEmpty {
-            let output = try inspector.git.execute("/usr/sbin/lsof", ["-nP", "-d", "cwd,txt", "-F0pn"])
-            guard output.code == 0 else { throw FeatureFailure(message: "Process activity could not be checked.") }
-            scanner.processPaths = try WorktreeActivity.paths(output.data)
+            scanner.processPaths = try WorktreeActivity.capture(inspector.git)
         }
         for root in roots {
             do {
@@ -35,9 +35,15 @@ struct WorktreeService: Sendable {
                 if !FileManager.default.fileExists(atPath: root + "/.git"), let walker = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                     options: [], errorHandler: { url, error in result.warnings.append("\(url.path): \(error.localizedDescription)"); return false }) {
                     for case let url as URL in walker {
-                        visited += 1
-                        guard visited <= 30_000, !Task.isCancelled else { throw FeatureFailure(message: "Discovery limit exceeded; choose a narrower folder.") }
+                        guard !Task.isCancelled else { throw CancellationError() }
                         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                        // Only folders count. A folder with many loose files must not hide the repositories after it.
+                        if values.isDirectory == true { visited += 1 }
+                        guard visited <= discoveryFolderLimit else {
+                            // Keep the repositories found before the limit, and say that the list is not complete.
+                            result.warnings.append("\(root): more than \(discoveryFolderLimit) folders. Some repositories are not in the list; choose a narrower folder.")
+                            break
+                        }
                         if values.isSymbolicLink == true { continue } // The enumerator does not follow links.
                         if values.isDirectory == true, FileManager.default.fileExists(atPath: url.appending(path: ".git").path) {
                             candidates.append(url.path); walker.skipDescendants(); continue
