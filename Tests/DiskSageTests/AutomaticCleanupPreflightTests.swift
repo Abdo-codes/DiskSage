@@ -18,7 +18,7 @@ struct AutomaticCleanupPreflightTests {
             $0.diskSage.preferences = { preferences.value }
             $0.diskSage.capacity = { available.value }
             $0.diskSage.freeSpace = { available.value }
-            $0.diskSage.scan = { for await result in scan.stream { return result }; return [] }
+            $0.diskSage.scan = { for await result in scan.stream { return ScanReport(candidates: result) }; return ScanReport(candidates: []) }
         }
         await store.send(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, initialSpace)) {
@@ -50,7 +50,7 @@ struct AutomaticCleanupPreflightTests {
         let cancelled = LockIsolated(false)
         scan.continuation.onTermination = { if case .cancelled = $0 { cancelled.setValue(true) } }
         let store = FeatureTestSupport.store {
-            $0.diskSage.scan = { for await result in scan.stream { return result }; return [] }
+            $0.diskSage.scan = { for await result in scan.stream { return ScanReport(candidates: result) }; return ScanReport(candidates: []) }
         }
         let task = await store.send(.scanRequested(.automatic)) {
             $0.activityRevision = 1; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(0)
@@ -73,7 +73,7 @@ struct AutomaticCleanupPreflightTests {
         let candidates = sensitiveOnly ? [FeatureTestSupport.candidate(risk: .high)] : []
         let store = FeatureTestSupport.store {
             $0.diskSage.preferences = { CleanupPreferences() }
-            $0.diskSage.scan = { candidates }
+            $0.diskSage.scan = { ScanReport(candidates: candidates) }
         }
         await store.send(.scanRequested(.automatic)) {
             $0.activityRevision = 1; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(0)

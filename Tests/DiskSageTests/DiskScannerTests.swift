@@ -20,6 +20,23 @@ struct DiskScannerTests {
         for candidate in candidates { try SafetyPolicy().validate(candidate) }
     }
 
+    @Test func generatedRootAboveTheInventoryLimitIsReportedAndNotOffered() async throws {
+        let base = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-limit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let small = base.appending(path: "Small/.build", directoryHint: .isDirectory)
+        let large = base.appending(path: "Large/.build", directoryHint: .isDirectory)
+        for (root, count) in [(small, 1), (large, 5)] {
+            try FileManager.default.createDirectory(at: root.appending(path: "debug"), withIntermediateDirectories: true)
+            for index in 0..<count { try Data(repeating: 1, count: 4096).write(to: root.appending(path: "debug/\(index).o")) }
+        }
+        let locations = [(small, "Small build"), (large, "Large build")].map {
+            DiskScanner.Location(url: $0.0, name: $0.1, category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles)
+        }
+        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4).report()
+        #expect(report.candidates.isEmpty)
+        #expect(report.warnings == ["Large build was skipped. \(InventoryLimitExceeded(limit: 4).localizedDescription)"])
+    }
+
     @Test func scannerNeverOffersItsOwnExecutableTree() async throws {
         let executable = try #require(Bundle.main.executableURL?.standardizedFileURL)
         let location = DiskScanner.Location(url: executable.deletingLastPathComponent(), name: "Running app",

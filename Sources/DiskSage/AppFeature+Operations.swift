@@ -27,6 +27,11 @@ extension AppFeature {
             case let .agent(job): return finishAgentScan(state: &state, jobID: job)
             case .automatic: return finishAutomaticScan(state: &state)
             }
+        case let .scanWarned(id, warnings):
+            // The scan finished, but some places were not checked. Show why, so a missing folder is never silent.
+            guard state.operationID == id, state.isScanning, !warnings.isEmpty else { return .none }
+            state.errorMessage = warnings.joined(separator: "\n")
+            return .none
         case let .scanFailed(id, purpose, failure):
             guard state.operationID == id, state.isScanning else { return .none }
             // The last list stays as it was. A failed scan proves nothing about the disk.
@@ -132,8 +137,8 @@ extension AppFeature {
         state.errorMessage = nil
         state.statusMessage = purpose == .automatic ? "Low disk space detected; scanning low-risk items…" : "Scanning generated files…"
         return .run { [client] send in
-            let results: [CleanupCandidate]
-            do { results = try await client.scan() } catch {
+            let report: ScanReport
+            do { report = try await client.scan() } catch {
                 guard !Task.isCancelled else { return }
                 await send(.scanFailed(id, purpose, FeatureFailure(message: error.localizedDescription)))
                 return
@@ -143,7 +148,8 @@ extension AppFeature {
             guard !Task.isCancelled else { return }
             let available = await client.capacity()
             guard !Task.isCancelled else { return }
-            await send(.scanFinished(id, purpose, results, available, dashboard))
+            if !report.warnings.isEmpty { await send(.scanWarned(id, report.warnings)) }
+            await send(.scanFinished(id, purpose, report.candidates, available, dashboard))
         }.cancellable(id: CancelID.scan)
     }
 }

@@ -18,6 +18,32 @@ struct GeneratedDiscoveryTests {
         #expect(GeneratedBuildDiscovery(maximumEntries: 0).directories(under: base).isEmpty)
     }
 
+    @Test func manyPlainFilesDoNotStopTheSearchForALaterBuildFolder() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        let base = f.home.appending(path: "Developer")
+        let assets = base.appending(path: "aaa-assets")
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        for index in 0..<300 { try Data().write(to: assets.appending(path: "image-\(index).bin")) }
+        let build = base.appending(path: "zzz-app/.build")
+        try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+        // The old walk counted every file against one small budget and stopped in the asset folder.
+        let result = GeneratedBuildDiscovery(maximumEntries: 10_000, maximumDirectories: 50).discover(under: base)
+        #expect(result.directories.map(\.path).contains(CleanupPath.fileURL(build).path))
+        #expect(!result.limitReached)
+    }
+
+    @Test func reachedDiscoveryLimitIsReported() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        let base = f.home.appending(path: "Developer")
+        for index in 0..<5 {
+            try FileManager.default.createDirectory(at: base.appending(path: "folder-\(index)/nested"), withIntermediateDirectories: true)
+            try Data().write(to: base.appending(path: "folder-\(index)/file.bin"))
+        }
+        #expect(GeneratedBuildDiscovery(maximumDirectories: 3).discover(under: base).limitReached)
+        #expect(GeneratedBuildDiscovery(maximumEntries: 3).discover(under: base).limitReached)
+        #expect(!GeneratedBuildDiscovery().discover(under: base).limitReached)
+    }
+
     @Test func scopeRecognizesOnlyCuratedCacheLeavesAndGeneratedRoots() throws {
         let f = try GeneratedCleanupFixture(); defer { f.remove() }
         let recognized = [(".npm/_cacache", GeneratedCleanupRule.npmContent),

@@ -124,7 +124,7 @@ struct AgentToolParityTests {
             state.agentToolJobOrder.append(id)
             state.managedRequests[id] = .init(action: .manage, requestID: id, tool: "get_history", arguments: [:])
         }
-        let store = ManagementTestSupport.store(state) { $0.diskSage.scan = { [] } }
+        let store = ManagementTestSupport.store(state) { $0.diskSage.scan = { ScanReport(candidates: []) } }
         await store.send(.agentToolRequest(.init(action: .scan, requestID: FeatureTestSupport.id(100)))).finish()
         #expect(store.agentToolJobs.count == 100)
         #expect(store.agentToolJobs[FeatureTestSupport.id(0)]?.phase == .loading)

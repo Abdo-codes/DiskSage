@@ -13,28 +13,35 @@ struct DiskScanner: Sendable {
 
     private let locations: [Location]?
     private let activity: @Sendable () throws -> CleanupActivity
-    init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() }) {
-        self.locations = locations; self.activity = activity
+    private let inventoryLimit: Int
+    init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() },
+         inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries) {
+        self.locations = locations; self.activity = activity; self.inventoryLimit = inventoryLimit
     }
 
+    func scan() async throws -> [CleanupCandidate] { try await report().candidates }
+
     /// Throws when the activity check fails. An empty result means that the scan ran and found nothing.
-    func scan() async throws -> [CleanupCandidate] {
-        let task = Task.detached(priority: .utility) { try Self.scanSynchronously(locations: locations, activity: activity) }
+    func report() async throws -> ScanReport {
+        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit] in
+            try Self.scanSynchronously(locations: locations, activity: activity, inventoryLimit: inventoryLimit)
+        }
         return try await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
             do {
                 let results = try await task.value
-                return Task.isCancelled ? [] : results
+                return Task.isCancelled ? ScanReport(candidates: []) : results
             } catch {
                 // A cancelled scan stops its activity check; that is not a failure.
-                if Task.isCancelled { return [] }
+                if Task.isCancelled { return ScanReport(candidates: []) }
                 throw error
             }
         } onCancel: { task.cancel() }
     }
 
-    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity) throws -> [CleanupCandidate] {
-        guard !Task.isCancelled else { return [] }
+    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity,
+                                          inventoryLimit: Int) throws -> ScanReport {
+        guard !Task.isCancelled else { return ScanReport(candidates: []) }
         // A failed/incomplete activity check never turns into permission to delete. It is an error, not an empty disk.
         let currentActivity: CleanupActivity
         do { currentActivity = try activity() } catch {
@@ -42,9 +49,13 @@ struct DiskScanner: Sendable {
         }
         let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
         var seeds = locations ?? defaultLocations(home: home)
-        var wholeFolders: [CleanupCandidate] = []
+        var wholeFolders: [CleanupCandidate] = [], warnings: [String] = []
         if locations == nil {
-            let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { GeneratedBuildDiscovery().directories(under: $0) }
+            let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { root in
+                let result = GeneratedBuildDiscovery().discover(under: root)
+                if result.limitReached { warnings.append(discoveryWarning(root, home: home)) }
+                return result.directories
+            }
             let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: currentActivity, home: home)
             wholeFolders = temporary.candidates + SimulatorInventory.candidates(activity: currentActivity, home: home) +
                 ToolCacheInventory.candidates(activity: currentActivity, home: home)
@@ -59,15 +70,30 @@ struct DiskScanner: Sendable {
             guard !Task.isCancelled, seen.insert(url.path).inserted else { return nil }
             if seed.deletionMode == .generatedFiles {
                 guard let rule = GeneratedCleanupScope.rule(for: url, home: home) else { return nil }
-                // This scan also offers whole folders, so idle DerivedData projects go to that rule.
-                return try? GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category,
-                                                       rule: rule, activity: currentActivity, handsOffWholeFolders: true)
+                do {
+                    // This scan also offers whole folders, so idle DerivedData projects go to that rule.
+                    return try GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category, rule: rule,
+                        activity: currentActivity, handsOffWholeFolders: true, maximumEntries: inventoryLimit)
+                } catch let limit as InventoryLimitExceeded {
+                    // Nothing is offered from a partial list, but the user must know why the folder is missing.
+                    warnings.append("\(seed.name) was skipped. \(limit.localizedDescription)")
+                    return nil
+                } catch {
+                    // A missing folder or a folder in use is a normal skip.
+                    return nil
+                }
             }
             guard !currentActivity.contains(url) else { return nil }
             return inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
                            reason: seed.reason, deletionMode: seed.deletionMode)
         }
-        return validated(candidates + wholeFolders).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+        let offered = validated(candidates + wholeFolders).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+        return ScanReport(candidates: offered, warnings: Task.isCancelled ? [] : warnings)
+    }
+
+    private static func discoveryWarning(_ root: URL, home: URL) -> String {
+        let place = root.path.hasPrefix(home.path + "/") ? "~/" + root.path.dropFirst(home.path.count + 1) : root.path
+        return "The search for build folders in \(place) stopped at its safety limit. Some build folders were not checked."
     }
 
     private static func defaultLocations(home: URL) -> [Location] {

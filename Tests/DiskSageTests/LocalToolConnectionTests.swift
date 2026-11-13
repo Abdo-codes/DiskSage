@@ -46,7 +46,7 @@ struct LocalToolConnectionTests {
             $0.uuid = .incrementing
             $0.date = .constant(FeatureTestSupport.epoch)
             $0.diskSage = .testValue
-            $0.diskSage.scan = { [candidate] }
+            $0.diskSage.scan = { ScanReport(candidates: [candidate]) }
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
             $0.diskSage.cleanup = { targets, trigger, progress in
                 await CleanupService(logger: logger).delete(targets, trigger: trigger, progress: progress)

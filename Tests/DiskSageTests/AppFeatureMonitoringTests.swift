@@ -42,7 +42,7 @@ struct AppFeatureMonitoringTests {
         let checks = LockIsolated<[CleanupLogEvent]>([])
         let store = FeatureTestSupport.store {
             $0.diskSage.preferences = { CleanupPreferences() }
-            $0.diskSage.scan = { [low, high] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, high]) }
             $0.diskSage.cleanup = { targets, trigger, _ in
                 #expect(targets == [low] && trigger == .automatic); return report
             }

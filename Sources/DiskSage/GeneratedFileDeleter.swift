@@ -14,7 +14,7 @@ enum GeneratedFileDeleter {
     static func inspect(_ root: URL, name: String, category: CandidateCategory, rule: GeneratedCleanupRule,
                         activity: CleanupActivity, cutoff: Date = Date().addingTimeInterval(-GeneratedCleanupPolicy.minimumAge),
                         policy: SafetyPolicy = SafetyPolicy(), handsOffWholeFolders: Bool = false,
-                        maximumEntries: Int = 200_000) throws -> CleanupCandidate? {
+                        maximumEntries: Int = GeneratedFileInventory.defaultMaximumEntries) throws -> CleanupCandidate? {
         guard GeneratedCleanupScope.rule(for: root, home: policy.home) == rule else { return nil }
         try activity.requireIdle(root, rule: rule)
         let inventory = try GeneratedFileInventory.read(root, rule: rule, cutoff: cutoff,

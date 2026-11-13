@@ -70,6 +70,7 @@ struct AppFeature {
         case scanRequested(ScanPurpose)
         case scanFinished(UUID, ScanPurpose, [CleanupCandidate], Int64, DashboardSnapshot)
         case scanFailed(UUID, ScanPurpose, FeatureFailure)
+        case scanWarned(UUID, [String])
         case advisorRequested(AgentConfiguration)
         case advisorFinished(UUID, AgentConfiguration, Result<AgentResponse, FeatureFailure>)
         case deleteApproved([CleanupCandidate], CleanupTrigger)
@@ -122,7 +123,7 @@ struct AppFeature {
         Reduce { state, action in
             switch action {
             case let .worktrees(action): return reduceWorktrees(state: &state, action: action)
-            case .scanRequested, .scanFinished, .scanFailed, .advisorRequested, .advisorFinished, .cancelOperation:
+            case .scanRequested, .scanFinished, .scanFailed, .scanWarned, .advisorRequested, .advisorFinished, .cancelOperation:
                 return reduceOperations(state: &state, action: action)
             case .deleteApproved, .cleanupProgress, .cleanupFinished, .requestDeletion,
                  .requestLowRiskCleanup, .confirmDeletion, .dismissConfirmation:

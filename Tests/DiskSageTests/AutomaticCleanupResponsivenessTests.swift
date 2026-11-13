@@ -18,7 +18,7 @@ struct AutomaticCleanupResponsivenessTests {
             $0.continuousClock = clock
             $0.diskSage.preferences = { CleanupPreferences() }
             $0.diskSage.capacity = { available.value }; $0.diskSage.freeSpace = { available.value }
-            $0.diskSage.scan = { [low, sensitive] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, sensitive]) }
             $0.diskSage.cleanup = { targets, trigger, _ in
                 #expect(targets == [low] && trigger == .automatic)
                 available.setValue(Self.highSpace)
@@ -70,7 +70,7 @@ struct AutomaticCleanupResponsivenessTests {
             $0.date = .init { date.value }
             $0.diskSage.preferences = { CleanupPreferences() }
             $0.diskSage.capacity = { available.value }; $0.diskSage.freeSpace = { available.value }
-            $0.diskSage.scan = { [] }
+            $0.diskSage.scan = { ScanReport(candidates: []) }
             $0.diskSage.logCheck = { event in checks.withValue { $0.append(event) } }
         }
         await store.send(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
