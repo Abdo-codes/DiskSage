@@ -151,7 +151,7 @@ struct GeneratedCleanupTests {
     @Test func inventoryLimitFailsClosed() throws {
         let f = try GeneratedCleanupFixture(); defer { f.remove() }
         try f.write("debug/a.o"); try f.write("debug/b.o")
-        #expect(throws: FeatureFailure.self) {
+        #expect(throws: InventoryLimitExceeded(limit: 1)) {
             try GeneratedFileInventory.read(f.root, rule: .buildArtifacts, cutoff: f.cutoff, maximumEntries: 1)
         }
     }

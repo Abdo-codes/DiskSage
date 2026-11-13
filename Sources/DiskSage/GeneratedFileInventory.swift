@@ -43,12 +43,19 @@ struct GeneratedFileInventory: Sendable {
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Scan and deletion read with this limit, so both see the same complete list.
+    /// It counts every file and folder that the walk visits. Xcode's DerivedData often has
+    /// more than 500,000 of them. One listed file uses up to about 700 bytes of memory,
+    /// so the list stays below about 700 MB. FolderSurvey uses the same limit.
+    static let defaultMaximumEntries = 1_000_000
+
     /// Files changed after `cutoff` are never listed. With an activity scope, any entry
     /// changed after `cutoff` also removes every file of its group from the inventory.
+    /// Throws `InventoryLimitExceeded` when the walk visits more than `maximumEntries`; no partial list is returned.
     static func read(_ root: URL, rule: GeneratedCleanupRule, cutoff: Date,
                      activity scope: GeneratedActivityScope = .none,
                      handsOff: (URL) -> Bool = { _ in false },
-                     maximumEntries: Int = 200_000) throws -> Self {
+                     maximumEntries: Int = defaultMaximumEntries) throws -> Self {
         let parts = CleanupPath.fileURL(root).pathComponents
         let fd = try SecureFileDeleter.openDirectoryChain(Array(parts.dropFirst()))
         defer { close(fd) }
@@ -79,7 +86,7 @@ struct GeneratedFileInventory: Sendable {
                 guard let name else { throw FeatureFailure(message: "A filename could not be verified.") }
                 if name == "." || name == ".." { continue }
                 visited += 1
-                guard visited <= maximumEntries else { throw FeatureFailure(message: "Generated-file inventory exceeded its safety limit.") }
+                guard visited <= maximumEntries else { throw InventoryLimitExceeded(limit: maximumEntries) }
                 try Task.checkCancellation()
                 let path = relative + [name]
                 var info = stat()

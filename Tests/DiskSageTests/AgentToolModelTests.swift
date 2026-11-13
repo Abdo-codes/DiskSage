@@ -9,7 +9,7 @@ struct AppFeatureToolTests {
         let low = FeatureTestSupport.candidate("low")
         let high = FeatureTestSupport.candidate("high", risk: .high)
         let store = FeatureTestSupport.store {
-            $0.diskSage.scan = { [low, high] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, high]) }
         }
         await store.send(.requestLowRiskCleanup) {
             $0.activityRevision = 1; $0.operation = .scanning; $0.operationID = FeatureTestSupport.id(0)
@@ -36,7 +36,7 @@ struct AppFeatureToolTests {
         let request = AgentToolRequest(action: .cleanLowRisk, requestID: jobID)
         var job = AgentToolJob(id: jobID, action: .cleanLowRisk, startedAt: FeatureTestSupport.epoch, phase: .scanning)
         let store = FeatureTestSupport.store {
-            $0.diskSage.scan = { [low] }
+            $0.diskSage.scan = { ScanReport(candidates: [low]) }
         }
         await store.send(.agentToolRequest(request)) {
             $0.agentToolJobs = [jobID: job]; $0.agentToolJobOrder = [jobID]; $0.activeAgentToolJobID = jobID
@@ -78,7 +78,7 @@ struct AppFeatureToolTests {
         var job = AgentToolJob(id: jobID, action: .cleanLowRisk, startedAt: FeatureTestSupport.epoch, phase: .scanning)
         let store = FeatureTestSupport.store {
             $0.diskSage.preferences = { preferences.value }
-            $0.diskSage.scan = { for await values in values.stream { return values }; return [] }
+            $0.diskSage.scan = { for await values in values.stream { return ScanReport(candidates: values) }; return ScanReport(candidates: []) }
         }
         await store.send(.agentToolRequest(.init(action: .cleanLowRisk, requestID: jobID))) {
             $0.agentToolJobs = [jobID: job]; $0.agentToolJobOrder = [jobID]; $0.activeAgentToolJobID = jobID
@@ -101,7 +101,7 @@ struct AppFeatureToolTests {
 
     @Test func emptyScansAndUnknownJobsNeverClaimDeletion() async {
         let store = FeatureTestSupport.store {
-            $0.diskSage.scan = { [] }
+            $0.diskSage.scan = { ScanReport(candidates: []) }
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
         }
         for (index, action) in [AgentToolRequest.Action.scan, .cleanLowRisk].enumerated() {

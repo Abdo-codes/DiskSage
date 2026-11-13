@@ -32,6 +32,7 @@ final class AppModel {
         get { store.errorMessage }
         set { store.send(.presentationError(newValue)) }
     }
+    var scanWarnings: [String] { store.scanWarnings }
     var agentToolConnectionError: String? {
         get { store.agentToolConnectionError }
         set { store.send(.toolConnectionChanged(newValue)) }

@@ -52,8 +52,8 @@ struct ScannerLifecycleTests {
         let store = FeatureTestSupport.store {
             $0.diskSage.scan = {
                 let number = calls.withValue { count in count += 1; return count }
-                for await values in number == 1 ? old.stream : current.stream { return values }
-                return []
+                for await values in number == 1 ? old.stream : current.stream { return ScanReport(candidates: values) }
+                return ScanReport(candidates: [])
             }
         }
         let firstTask = await store.send(.scanRequested(.review)) {

@@ -24,6 +24,10 @@ struct ReviewHeader: View {
                 Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                     .textSelection(.enabled)
             }
+            ForEach(model.scanWarnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
             if !model.recommendationSummary.isEmpty {
                 Label(model.recommendationSummary, systemImage: "sparkles")
                     .font(.callout).foregroundStyle(.secondary)

@@ -65,7 +65,7 @@ struct AppFeatureAdvisorTests {
                 for await response in advice.stream { return response }
                 throw CancellationError()
             }
-            $0.diskSage.scan = { for await value in scan.stream { return value }; return [] }
+            $0.diskSage.scan = { for await value in scan.stream { return ScanReport(candidates: value) }; return ScanReport(candidates: []) }
         }
         let adviceTask = await store.send(.advisorRequested(config)) {
             $0.activityRevision = 1; $0.operation = .advising; $0.operationID = FeatureTestSupport.id(0)

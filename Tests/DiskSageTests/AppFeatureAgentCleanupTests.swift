@@ -15,7 +15,7 @@ struct AppFeatureAgentCleanupTests {
         let report = CleanupReport(items: [failure], freeSpaceBefore: 100, freeSpaceAfter: 100, loggingError: "/private/secret-log unavailable")
         let store = FeatureTestSupport.store(.init(candidates: [stale], lastScanDate: FeatureTestSupport.epoch)) {
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
-            $0.diskSage.scan = { [low, medium, high] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, medium, high]) }
             $0.diskSage.cleanup = { targets, trigger, _ in
                 #expect(targets == [low] && trigger == .agent); return report
             }
@@ -54,7 +54,7 @@ struct AppFeatureAgentCleanupTests {
         let report = CleanupReport(items: [CleanupItemResult(candidate: low, removedBytes: 4096, errorDescription: nil)],
                                    freeSpaceBefore: 100, freeSpaceAfter: 200, removedEntryCount: 3)
         let store = FeatureTestSupport.store {
-            $0.diskSage.scan = { [low, high] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, high]) }
             $0.diskSage.cleanup = { targets, trigger, _ in
                 #expect(targets == [low] && trigger == .agent)
                 for await _ in finish.stream { break }

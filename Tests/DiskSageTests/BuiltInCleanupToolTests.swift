@@ -20,7 +20,7 @@ struct AppFeatureBuiltInCleanupTests {
             $0.diskSage.advise = { targets, configuration in
                 #expect(targets == [low, high] && configuration == config); return response
             }
-            $0.diskSage.scan = { [low, high] }
+            $0.diskSage.scan = { ScanReport(candidates: [low, high]) }
             $0.diskSage.cleanup = { targets, trigger, _ in
                 #expect(targets == [low] && trigger == .agent); return report
             }
@@ -98,7 +98,7 @@ struct AppFeatureBuiltInCleanupTests {
         let response = AgentResponse(summary: "Request", recommendations: [
             AgentRecommendation(id: low.id, decision: .delete, rationale: "Generated")], cleanupRequested: true)
         let store = FeatureTestSupport.store(.init(candidates: [low])) {
-            $0.diskSage.advise = { _, _ in response }; $0.diskSage.scan = { [low] }
+            $0.diskSage.advise = { _, _ in response }; $0.diskSage.scan = { ScanReport(candidates: [low]) }
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .confirm, builtInCleanupEnabled: true) }
         }
         await store.send(.advisorRequested(config)) {
