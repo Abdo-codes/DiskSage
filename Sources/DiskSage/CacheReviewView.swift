@@ -33,13 +33,6 @@ struct CacheReviewView: View {
         .onChange(of: model.candidates, initial: true) { _, _ in updateVisibleCandidates() }
         .onChange(of: query) { _, _ in updateVisibleCandidates() }
         .onChange(of: riskFilter) { _, _ in updateVisibleCandidates() }
-        .sheet(item: Binding(get: { model.pendingDeletionRequest }, set: { value in
-            if value == nil { model.cancelDeletionRequest() }
-        })) { request in
-            DeletionConfirmationView(request: request) {
-                model.confirmDeletion(request)
-            }
-        }
     }
 
     private var candidateTable: some View {

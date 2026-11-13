@@ -23,7 +23,7 @@ struct DiskSageApp {
 final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowDelegate {
     private let model: AppModel
     private let store: StoreOf<AppFeature>
-    private var presentedAgentConfirmationID: UUID?
+    private var presentedDeletionConfirmationID: UUID?
     private var statusItem: NSStatusItem?
     private var dashboard: DashboardPanelController?
     private var reviewWindow: NSWindow?
@@ -54,12 +54,12 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         observe { [weak self] in self?.presentManagementApproval() }
         observe { [weak self] in
             guard let self else { return }
-            guard let request = self.store.pendingDeletionRequest, request.trigger == .agent else {
-                self.presentedAgentConfirmationID = nil
+            guard let request = self.store.pendingDeletionRequest else {
+                self.presentedDeletionConfirmationID = nil
                 return
             }
-            guard self.presentedAgentConfirmationID != request.id else { return }
-            self.presentedAgentConfirmationID = request.id
+            guard self.presentedDeletionConfirmationID != request.id else { return }
+            self.presentedDeletionConfirmationID = request.id
             self.showReview()
         }
         do {
