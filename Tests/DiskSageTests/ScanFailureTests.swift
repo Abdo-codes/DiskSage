@@ -68,6 +68,17 @@ struct ScanFailureTests {
         #expect(output.data.count >= 12 * 1_048_576)
     }
 
+    @Test func processRunsDoNotLeaveDescriptorsOpen() throws {
+        func openDescriptors() throws -> Int { try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count }
+        let git = WorktreeGitProcess()
+        _ = try git.execute("/usr/bin/true", [])
+        let before = try openDescriptors()
+        for _ in 0..<50 { _ = try git.execute("/bin/echo", ["x"]) }
+        // The reader thread of the last run can still hold its handle for a moment.
+        usleep(200_000)
+        #expect(try openDescriptors() <= before + 2)
+    }
+
     @Test func liveActivityCaptureWorksOnThisMac() throws {
         // This runs the real lsof. It failed on a Mac with more than 8 MB of open-file output.
         let activity = try CleanupActivity.capture()
