@@ -94,8 +94,10 @@ struct GeneratedCleanupTests {
                 activity: { CleanupActivity(paths: [file.path]) }, entryRemoved: {})
         }
         #expect(f.exists("debug/a.o"))
-        let results = await DiskScanner(locations: [], activity: { throw FeatureFailure(message: "unavailable") }).scan()
-        #expect(results.isEmpty)
+        // A failed activity check is an error. It must not look like an empty disk.
+        await #expect(throws: FeatureFailure.self) {
+            try await DiskScanner(locations: [], activity: { throw FeatureFailure(message: "unavailable") }).scan()
+        }
         #expect(CleanupActivity(paths: [], commands: ["go"]).contains(f.root, rule: .goBuild))
     }
 

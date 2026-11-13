@@ -17,19 +17,29 @@ struct DiskScanner: Sendable {
         self.locations = locations; self.activity = activity
     }
 
-    func scan() async -> [CleanupCandidate] {
-        let task = Task.detached(priority: .utility) { Self.scanSynchronously(locations: locations, activity: activity) }
-        return await withTaskCancellationHandler {
+    /// Throws when the activity check fails. An empty result means that the scan ran and found nothing.
+    func scan() async throws -> [CleanupCandidate] {
+        let task = Task.detached(priority: .utility) { try Self.scanSynchronously(locations: locations, activity: activity) }
+        return try await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
-            let results = await task.value
-            return Task.isCancelled ? [] : results
+            do {
+                let results = try await task.value
+                return Task.isCancelled ? [] : results
+            } catch {
+                // A cancelled scan stops its activity check; that is not a failure.
+                if Task.isCancelled { return [] }
+                throw error
+            }
         } onCancel: { task.cancel() }
     }
 
-    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity) -> [CleanupCandidate] {
+    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity) throws -> [CleanupCandidate] {
         guard !Task.isCancelled else { return [] }
-        // A failed/incomplete activity check never turns into permission to delete.
-        guard let currentActivity = try? activity() else { return [] }
+        // A failed/incomplete activity check never turns into permission to delete. It is an error, not an empty disk.
+        let currentActivity: CleanupActivity
+        do { currentActivity = try activity() } catch {
+            throw FeatureFailure(message: "The scan could not check which folders are in use: \(error.localizedDescription)")
+        }
         let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
         var seeds = locations ?? defaultLocations(home: home)
         var wholeFolders: [CleanupCandidate] = []
