@@ -38,6 +38,14 @@ enum GeneratedCleanupPolicy {
             [".xcresult", ".xcarchive", ".dsym", ".app", ".simruntime"].contains(where: value.hasSuffix)
     }
 
+    /// A tool can hold a lock file, so never offer one. Whole-word match: "lock.o" stays out, "Block.o" does not.
+    static func isLockFile(_ name: String) -> Bool {
+        let value = name.lowercased()
+        if value.contains("lockfile") { return true }
+        let words = value.split { !$0.isLetter }
+        return words.contains { $0 == "lock" || $0 == "lck" }
+    }
+
     static func mayDescend(_ parts: [String]) -> Bool {
         guard !parts.contains(where: protected) else { return false }
         // Downloaded external repositories are inputs, whereas bazel-out/.../external contains outputs.
@@ -48,7 +56,7 @@ enum GeneratedCleanupPolicy {
     static func eligible(name: String, parents: [String], rootName: String,
                          rule: GeneratedCleanupRule, prefix: () throws -> Data,
                          checksum: () throws -> String) throws -> Bool {
-        guard !protected(name), !parents.contains(where: protected), !name.lowercased().contains("lock") else { return false }
+        guard !protected(name), !parents.contains(where: protected), !isLockFile(name) else { return false }
         let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
         switch rule {
         case .goBuild:
