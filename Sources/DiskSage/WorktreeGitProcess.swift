@@ -31,15 +31,10 @@ struct WorktreeGitProcess: Sendable {
         return blockers
     }
     /// `environment` adds to the fixed environment. A run that is still going after `timeout` seconds is stopped.
-    func execute(_ executable: String, _ args: [String], allowTermination: Bool = true,
-                 timeout: TimeInterval = 20, environment: [String: String] = [:]) throws -> Output {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "disksage-git-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appending(path: "output")
-        _ = FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        let handle = try FileHandle(forWritingTo: file)
-        defer { try? handle.close() }
+    /// The output stays in memory, so a full disk cannot break a check. `outputLimit` is the largest accepted output.
+    func execute(_ executable: String, _ args: [String], allowTermination: Bool = true, timeout: TimeInterval = 20,
+                 environment: [String: String] = [:], outputLimit: Int = 8_000_000) throws -> Output {
+        let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
@@ -47,25 +42,38 @@ struct WorktreeGitProcess: Sendable {
             "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
             .merging(environment) { _, added in added }
-        process.standardOutput = handle
-        process.standardError = handle
+        process.standardOutput = pipe
+        process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
         try process.run()
+        try? pipe.fileHandleForWriting.close()
+        let buffer = ProcessOutputBuffer()
+        let reader = pipe.fileHandleForReading
+        // Its own thread: a blocked read must not hold a thread of the shared dispatch pool.
+        Thread.detachNewThread {
+            while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty { buffer.append(chunk) }
+            buffer.finish()
+        }
+        let name = URL(fileURLWithPath: executable).lastPathComponent
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning {
-            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            if allowTermination && (Task.isCancelled || Date() > deadline || size > 8_000_000) {
+            let tooLarge = buffer.count > outputLimit
+            if allowTermination && (Task.isCancelled || Date() > deadline || tooLarge) {
                 process.terminate()
                 usleep(100_000)
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                 process.waitUntilExit()
-                throw FeatureFailure(message: "\(URL(fileURLWithPath: executable).lastPathComponent) was cancelled or exceeded its time/output limit.")
+                try? reader.close()
+                throw FeatureFailure(message: tooLarge ? "\(name) exceeded its output limit."
+                    : "\(name) was cancelled or exceeded its time limit.")
             }
             usleep(10_000)
         }
         process.waitUntilExit()
-        let reader = try FileHandle(forReadingFrom: file)
-        defer { try? reader.close() }
-        return Output(data: try reader.read(upToCount: 8_000_000) ?? Data(), code: process.terminationStatus)
+        // A child that keeps the pipe open must not block the result.
+        let complete = buffer.wait(seconds: 2)
+        if !complete { try? reader.close() }
+        guard complete, buffer.count <= outputLimit else { throw FeatureFailure(message: "\(name) exceeded its output limit.") }
+        return Output(data: buffer.data, code: process.terminationStatus)
     }
 }

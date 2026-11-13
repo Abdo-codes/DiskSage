@@ -31,15 +31,15 @@ struct ScannerLifecycleTests {
         #expect(DiskScanner.validated([original]).isEmpty)
     }
 
-    @Test func alreadyCancelledScanReturnsNoCandidates() async {
+    @Test func alreadyCancelledScanReturnsNoCandidates() async throws {
         let gate = ScanGate()
         let task = Task {
             await gate.wait()
-            return await DiskScanner().scan()
+            return try await DiskScanner().scan()
         }
         task.cancel()
         await gate.open()
-        #expect(await task.value.isEmpty)
+        #expect(try await task.value.isEmpty)
     }
 
     @MainActor @Test func cancelledScanCannotReplaceANewerOperation() async {

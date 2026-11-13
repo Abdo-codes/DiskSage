@@ -28,7 +28,7 @@ struct FeatureFailure: LocalizedError, Equatable, Sendable {
 }
 
 struct DiskSageClient: Sendable {
-    var scan: @Sendable () async -> [CleanupCandidate]
+    var scan: @Sendable () async throws -> [CleanupCandidate]
     var advise: AdvisorAction
     var cleanup: CleanupAction
     var dashboard: @Sendable () async -> DashboardSnapshot
@@ -41,7 +41,7 @@ struct DiskSageClient: Sendable {
 
 extension DiskSageClient: DependencyKey {
     static let liveValue = Self(
-        scan: { await DiskScanner().scan() },
+        scan: { try await DiskScanner().scan() },
         advise: { try await AgentAdvisor().recommend(candidates: $0, configuration: $1) },
         cleanup: { await CleanupService().delete($0, trigger: $1, progress: $2) },
         dashboard: {

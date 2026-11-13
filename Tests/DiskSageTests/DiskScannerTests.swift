@@ -15,7 +15,7 @@ struct DiskScannerTests {
             DiskScanner.Location(url: $0, name: $0.lastPathComponent, category: .build, risk: .low,
                                  reason: "Generated fixture", deletionMode: .item)
         }
-        let candidates = await DiskScanner(locations: locations).scan()
+        let candidates = try await DiskScanner(locations: locations).scan()
         #expect(Set(candidates.map(\.url)) == Set(paths.prefix(2)))
         for candidate in candidates { try SafetyPolicy().validate(candidate) }
     }
@@ -24,7 +24,7 @@ struct DiskScannerTests {
         let executable = try #require(Bundle.main.executableURL?.standardizedFileURL)
         let location = DiskScanner.Location(url: executable.deletingLastPathComponent(), name: "Running app",
             category: .build, risk: .low, reason: "Fixture", deletionMode: .item)
-        let candidates = await DiskScanner(locations: [location]).scan()
+        let candidates = try await DiskScanner(locations: [location]).scan()
         #expect(candidates.isEmpty)
     }
 
@@ -38,8 +38,8 @@ struct DiskScannerTests {
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DISKSAGE_LIVE_SCAN_TEST"] == "1"))
-    func liveScanCandidatesPassPolicyOnThisMac() async {
-        let candidates = await DiskScanner().scan()
+    func liveScanCandidatesPassPolicyOnThisMac() async throws {
+        let candidates = try await DiskScanner().scan()
         for candidate in candidates {
             do { try SafetyPolicy().validate(candidate) }
             catch { Issue.record(error, Comment(rawValue: "Candidate: \(candidate.url.path)")) }

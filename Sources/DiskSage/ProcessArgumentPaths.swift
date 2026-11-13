@@ -8,13 +8,15 @@ enum ProcessArgumentPaths {
     /// Reads every process of the current user. Fails closed when this process's
     /// own arguments cannot be read, because then no other result can be trusted.
     static func capture() throws -> Set<String> {
-        let ownArguments = arguments(of: getpid())
+        // One buffer serves all processes. A new 1 MB buffer for each of some thousand processes is slow.
+        var buffer = [UInt8](repeating: 0, count: maximumArgumentBytes())
+        let ownArguments = arguments(of: getpid(), buffer: &buffer)
         guard ownArguments?.isEmpty == false else {
             throw FeatureFailure(message: "Running build commands could not be checked. Nothing was deleted.")
         }
         var result = Set<String>()
         for pid in processIdentifiers() where pid > 0 && pid != getpid() {
-            guard let values = arguments(of: pid) else { continue }
+            guard let values = arguments(of: pid, buffer: &buffer) else { continue }
             result.formUnion(paths(arguments: values, workingDirectory: workingDirectory(of: pid)))
         }
         return result
@@ -52,12 +54,21 @@ enum ProcessArgumentPaths {
 
     /// Parses KERN_PROCARGS2: argc, the executable path, padding, then argv.
     static func arguments(of pid: pid_t) -> [String]? {
+        var buffer = [UInt8](repeating: 0, count: maximumArgumentBytes())
+        return arguments(of: pid, buffer: &buffer)
+    }
+
+    private static func maximumArgumentBytes() -> Int {
         var maximum: Int32 = 0, size = MemoryLayout<Int32>.size
         var query = [CTL_KERN, KERN_ARGMAX]
-        guard sysctl(&query, 2, &maximum, &size, nil, 0) == 0, maximum > 0 else { return nil }
-        var buffer = [UInt8](repeating: 0, count: Int(maximum))
+        return sysctl(&query, 2, &maximum, &size, nil, 0) == 0 ? Int(max(maximum, 0)) : 0
+    }
+
+    /// Only the first `length` bytes that the kernel wrote are read, so old content in `buffer` is not used.
+    private static func arguments(of pid: pid_t, buffer: inout [UInt8]) -> [String]? {
+        guard !buffer.isEmpty else { return nil }
         var length = buffer.count
-        query = [CTL_KERN, KERN_PROCARGS2, pid]
+        var query = [CTL_KERN, KERN_PROCARGS2, pid]
         guard sysctl(&query, 3, &buffer, &length, nil, 0) == 0, length > MemoryLayout<Int32>.size else { return nil }
         let argc = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
         guard argc > 0 else { return nil }

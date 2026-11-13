@@ -27,6 +27,18 @@ extension AppFeature {
             case let .agent(job): return finishAgentScan(state: &state, jobID: job)
             case .automatic: return finishAutomaticScan(state: &state)
             }
+        case let .scanFailed(id, purpose, failure):
+            guard state.operationID == id, state.isScanning else { return .none }
+            // The last list stays as it was. A failed scan proves nothing about the disk.
+            state.operation = .idle
+            state.operationID = nil
+            state.errorMessage = failure.message
+            state.statusMessage = purpose == .automatic ? "Automatic cleanup skipped: the scan failed." : "Scan failed"
+            if case let .agent(job) = purpose, state.activeAgentToolJobID == job {
+                state.agentToolJobs[job]?.result = .object(["error": .string(failure.message)])
+                completeAgentJob(state: &state, id: job, phase: .failed)
+            }
+            return .none
         case let .advisorRequested(configuration):
             guard !state.isBusy, !state.candidates.isEmpty else { return .none }
             let id = uuid()
@@ -120,7 +132,12 @@ extension AppFeature {
         state.errorMessage = nil
         state.statusMessage = purpose == .automatic ? "Low disk space detected; scanning low-risk items…" : "Scanning generated files…"
         return .run { [client] send in
-            let results = await client.scan()
+            let results: [CleanupCandidate]
+            do { results = try await client.scan() } catch {
+                guard !Task.isCancelled else { return }
+                await send(.scanFailed(id, purpose, FeatureFailure(message: error.localizedDescription)))
+                return
+            }
             guard !Task.isCancelled else { return }
             let dashboard = await client.dashboard()
             guard !Task.isCancelled else { return }
