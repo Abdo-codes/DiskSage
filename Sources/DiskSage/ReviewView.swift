@@ -17,5 +17,13 @@ struct ReviewView: View {
             else { CacheReviewView(model: model) }
         }
         .frame(minWidth: 800, minHeight: 560)
+        // The sheet lives on the window root, so it shows on every section.
+        .sheet(item: Binding(get: { model.pendingDeletionRequest }, set: { value in
+            if value == nil { model.cancelDeletionRequest() }
+        })) { request in
+            DeletionConfirmationView(request: request) {
+                model.confirmDeletion(request)
+            }
+        }
     }
 }
