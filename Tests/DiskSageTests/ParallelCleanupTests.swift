@@ -10,7 +10,7 @@ struct ParallelCleanupTests {
         let probe = WorkerProbe()
         let targets = (0..<10).map { candidate("item\($0)") }
         let service = CleanupService(logger: logger, maximumWorkers: 99, remove: { target, entry in
-            try probe.remove(target, entry: entry)
+            try probe.remove(target, entry: entry); return nil
         }, writeEvent: { event in
             try logger.append(event)
             if event.event == .itemStarted { probe.logged(event.name!) }
@@ -38,7 +38,7 @@ struct ParallelCleanupTests {
         let targets = (0..<12).map { candidate("item\($0)") }
         let logger = CleanupLogger(directory: root)
         let service = CleanupService(logger: logger, maximumWorkers: 4, remove: { target, entry in
-            try probe.remove(target, entry: entry)
+            try probe.remove(target, entry: entry); return nil
         }, writeEvent: { event in
             if (failurePoint == "runStart" && event.event == .started) ||
                 (failurePoint == "thirdItemStart" && event.event == .itemStarted && event.name == "item2") ||
@@ -71,7 +71,7 @@ struct ParallelCleanupTests {
         let last = candidate("last")
         let targets = [a, nested, independent, simulator, last]
         let service = CleanupService(logger: CleanupLogger(directory: root), remove: { target, _ in
-            try probe.remove(target, entry: {})
+            try probe.remove(target, entry: {}); return nil
         })
         let task = Task { await service.delete(targets) }
         let twoReady = await waitUntil { probe.started.count == 2 }

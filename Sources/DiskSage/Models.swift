@@ -119,6 +119,8 @@ struct CleanupItemResult: Equatable, Sendable {
     let candidate: CleanupCandidate
     let removedBytes: Int64
     let errorDescription: String?
+    /// Extra detail for a success, such as files kept because they changed after the scan.
+    var note: String? = nil
 
     var succeeded: Bool { errorDescription == nil }
 }

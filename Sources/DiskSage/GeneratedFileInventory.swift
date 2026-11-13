@@ -26,6 +26,12 @@ struct GeneratedFileEntry: Sendable {
     let parts: [String]
     let stamp: GeneratedFileStamp
     var path: String { parts.joined(separator: "/") }
+    /// The first 8 bytes of SHA-256 over the path and the stamp. A scan keeps one per file, so a deletion can find unchanged files.
+    var fingerprint: UInt64 {
+        let path = Data(path.utf8)
+        let digest = SHA256.hash(data: Data("\(path.count):".utf8) + path + Data(":\(stamp.key)".utf8))
+        return digest.prefix(8).reduce(0) { $0 << 8 | UInt64($1) }
+    }
 }
 
 struct GeneratedFileInventory: Sendable {
@@ -41,6 +47,11 @@ struct GeneratedFileInventory: Sendable {
             hash.update(data: Data(":\(entry.stamp.key)\n".utf8))
         }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+    /// Sorted entry fingerprints, 8 bytes each, little-endian.
+    var fingerprints: Data {
+        var values = entries.map(\.fingerprint).sorted()
+        return Data(bytes: &values, count: values.count * MemoryLayout<UInt64>.size)
     }
 
     /// Scan and deletion read with this limit, so both see the same complete list.
