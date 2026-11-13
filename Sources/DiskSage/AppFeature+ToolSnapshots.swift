@@ -16,7 +16,8 @@ extension AppFeature {
                 "current_items": .object(Dictionary(uniqueKeysWithValues: state.cleanupActiveItems.map { ($0.key.uuidString, .string($0.value)) })),
                 "recommendation_count": .integer(state.recommendations.count), "advice_summary": .string(state.recommendationSummary),
                 "disk_usage": try .encode(state.diskUsage), "last_scan": try .encode(state.lastScanDate),
-                "error": try .encode(state.errorMessage), "schedule_error": try .encode(state.scheduleError)]
+                "error": try .encode(state.errorMessage), "scan_warnings": try .encode(state.scanWarnings),
+                "schedule_error": try .encode(state.scheduleError)]
             let information = AppInformation()
             result["app"] = .object(["name": .string("DiskSage"), "version": .string(information.displayVersion),
                 "developer": .string("Abdo Eaita"), "license": .string("MIT"),

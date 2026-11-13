@@ -33,13 +33,30 @@ struct ScanFailureTests {
             $0.activityRevision = 1; $0.operation = .scanning; $0.operationID = FeatureTestSupport.id(0)
             $0.statusMessage = "Scanning generated files…"
         }
-        await store.receive(.scanWarned(FeatureTestSupport.id(0), [warning])) { $0.errorMessage = warning }
+        await store.receive(.scanWarned(FeatureTestSupport.id(0), [warning])) { $0.scanWarnings = [warning] }
         await store.receive(.scanFinished(FeatureTestSupport.id(0), .review, [found], 100, DashboardSnapshot())) {
             $0.candidates = [found]; $0.selection = [found.id]; $0.freeSpaceBytes = 100
             $0.lastScanDate = FeatureTestSupport.epoch; $0.dashboardRevision = 1
             $0.operation = .idle; $0.operationID = nil; $0.statusMessage = "Found 1 candidates"
         }
         await store.finish()
+    }
+
+    @Test func scanWarningStaysAfterAutomaticCleanup() async {
+        let low = FeatureTestSupport.candidate("low")
+        let report = CleanupReport(items: [CleanupItemResult(candidate: low, removedBytes: 4096, errorDescription: nil)],
+                                   freeSpaceBefore: 100, freeSpaceAfter: 200)
+        let store = FeatureTestSupport.store {
+            $0.diskSage.preferences = { CleanupPreferences() }
+            $0.diskSage.scan = { ScanReport(candidates: [low], warnings: ["A folder was skipped."]) }
+            $0.diskSage.cleanup = { _, _, _ in report }
+        }
+        store.exhaustivity = .off
+        await store.send(.monitorTick)
+        await store.receive(\.scanWarned) { $0.scanWarnings = ["A folder was skipped."] }
+        await store.receive(\.cleanupFinished) { $0.candidates = []; $0.cleanupReport = report }
+        #expect(store.state.scanWarnings == ["A folder was skipped."])
+        #expect(store.state.errorMessage == nil)
     }
 
     @Test func processOutputAboveTheOldEightMegabyteCapIsRead() throws {

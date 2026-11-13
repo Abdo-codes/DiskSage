@@ -17,6 +17,8 @@ struct AppFeature {
         var operationID: UUID?
         var statusMessage = "Ready to scan"
         var errorMessage: String?
+        /// Places that the last scan did not check. They stay until the next scan, also through a cleanup.
+        var scanWarnings: [String] = []
         var lastRecoveredBytes: Int64 = 0
         var freeSpaceBytes: Int64 = 0
         var lastAutomaticCleanup: Date?

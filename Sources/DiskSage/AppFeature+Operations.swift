@@ -30,7 +30,7 @@ extension AppFeature {
         case let .scanWarned(id, warnings):
             // The scan finished, but some places were not checked. Show why, so a missing folder is never silent.
             guard state.operationID == id, state.isScanning, !warnings.isEmpty else { return .none }
-            state.errorMessage = warnings.joined(separator: "\n")
+            state.scanWarnings = warnings
             return .none
         case let .scanFailed(id, purpose, failure):
             guard state.operationID == id, state.isScanning else { return .none }
@@ -135,6 +135,7 @@ extension AppFeature {
         state.cleanupReport = nil
         state.cleanupFailures = []
         state.errorMessage = nil
+        state.scanWarnings = []
         state.statusMessage = purpose == .automatic ? "Low disk space detected; scanning low-risk items…" : "Scanning generated files…"
         return .run { [client] send in
             let report: ScanReport
