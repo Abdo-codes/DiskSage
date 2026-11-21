@@ -82,11 +82,12 @@ empty, symlinked, disallowed, or running-executable targets are excluded.
 | Go build cache | Recognizable compiled payloads; test output and action metadata stay |
 | Go module, SwiftPM binary and Bazel repository downloads | Recognized download files; Bazel archives require matching SHA-256 |
 | Known Electron apps | HTTP, code and GPU cache leaves only |
+| Xcode `<platform> DeviceSupport` folders | A version folder only when a newer version exists for the same device model and architecture |
+| Simulator devices, through `simctl` | One shut-down, unused device at a time, as a **Review** item; deleting it removes that device's installed apps and data |
 
-The default scan preserves source snapshots, checkouts, prebuilt tool bundles,
-installed dependencies, test evidence, conversation history, simulator data,
-session disks and iOS device-support symbols. It does not offer arbitrary app
-cache folders, archives, installed runtimes or tool versions for removal.
+The default scan preserves source snapshots, checkouts, prebuilt tool bundles, installed dependencies,
+test evidence, conversation history, session disks and the newest device-support version per device. It never
+offers booted, in-use or kept simulators, app cache folders, archives, installed runtimes or tool versions.
 
 Files must be at least one hour old, including creation and metadata-change time.
 Open files and active build/cache folders are skipped. An unavailable activity
