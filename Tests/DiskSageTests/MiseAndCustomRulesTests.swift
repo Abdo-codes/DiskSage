@@ -105,4 +105,52 @@ struct MiseAndCustomRulesTests {
         try Data(#"{"quiet_hours": 0}"#.utf8).write(to: rulesFile)
         #expect(throws: (any Error).self) { _ = try ProjectCacheRulesLoader.load(from: rulesFile) }
     }
+
+    @Test func customRefuseInsidePreservesBuiltInProtectionsAndCustomSkipExcludesCaches() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        try FileManager.default.createDirectory(at: rulesFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json = """
+        {
+          "refuse_inside": { "_build": ["custom/*"] },
+          "skip": ["node_modules"]
+        }
+        """
+        try Data(json.utf8).write(to: rulesFile)
+        let loaded = try ProjectCacheRulesLoader.load(from: rulesFile)
+
+        // Built-in Mix release protections remain alongside the added custom pattern.
+        let buildProtections = Set(loaded.refuseInside["_build"] ?? [])
+        #expect(buildProtections.isSuperset(of: ["*/rel", "*/lib/*/src", "custom/*"]))
+
+        let app = f.base.appending(path: "Developer/mix-js-app")
+        try initGitProject(at: app, gitignore: "_build/\nnode_modules/\n")
+        try f.write("Developer/mix-js-app/mix.exs", bytes: 32)
+        try f.write("Developer/mix-js-app/_build/prod/rel/app/COOKIE", bytes: 64)
+        try f.write("Developer/mix-js-app/node_modules/pkg/index.js", bytes: 8_192)
+
+        let quietNow = f.later(hours: 30)
+        // Both `_build` (built-in `*/rel` protection preserved) and `node_modules` (custom skip) are excluded.
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base,
+                                                 rules: loaded, minimumBytes: 1).isEmpty)
+        #expect(!ProjectCacheInventory.isAllowedScope(app.appending(path: "node_modules"), home: f.base, rules: loaded))
+    }
+
+    @Test func retainsDeepMiseTrackedProjectsBeyondAncestorDiscoveryDepth() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        // 7 directory levels below ~/Developer (deeper than discoveryDepthLimit == 5).
+        let deepRel = "Developer/l1/l2/l3/l4/l5/l6/deep-app"
+        let deepProject = f.base.appending(path: deepRel)
+        try initGitProject(at: deepProject, gitignore: "node_modules/\n")
+        let miseToml = try f.write("\(deepRel)/mise.toml", bytes: 32)
+        try f.write("\(deepRel)/node_modules/pkg/index.js", bytes: 8_192)
+        let tracked = try f.folder(".local/state/mise/tracked-configs")
+        try FileManager.default.createSymbolicLink(at: tracked.appending(path: "deep"), withDestinationURL: miseToml)
+
+        let env = MiseProjectDiscovery.Environment(home: CleanupPath.fileURL(f.base))
+        let quietNow = f.later(hours: 30)
+        let found = ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base,
+                                                     minimumBytes: 1, miseEnv: env)
+        #expect(found.map(\.url) == [CleanupPath.fileURL(deepProject.appending(path: "node_modules"))])
+    }
 }

@@ -84,7 +84,12 @@ enum ProjectCacheRulesLoader {
                       patterns.allSatisfy(ProjectCacheRules.isValidInsidePattern) else {
                     throw FeatureFailure(message: "Invalid refuse_inside rule for \(key)")
                 }
-                merged.refuseInside[key] = patterns
+                // Always preserve built-in protections; custom patterns extend them.
+                var combined = merged.refuseInside[key] ?? []
+                for pattern in patterns where !combined.contains(pattern) {
+                    combined.append(pattern)
+                }
+                merged.refuseInside[key] = combined
             }
         }
 
