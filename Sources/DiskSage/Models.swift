@@ -50,6 +50,8 @@ enum DeletionMode: String, Codable, Sendable {
     case simulatorDevices
     /// One simulator device, deleted with `simctl delete <udid>`.
     case simulatorDevice
+    /// One unused or unusable simulator runtime image, deleted with `simctl runtime delete <id>`.
+    case simulatorRuntime
     /// A tool cache, cleaned with the tool's own command (see `ToolCache`).
     case toolCommand
     /// A Git-verified project cache directory (such as `node_modules`, `target`, or `.venv`).
@@ -73,6 +75,7 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
     let identity: FileIdentity
     let deletionMode: DeletionMode
     let generatedSnapshot: GeneratedCleanupSnapshot?
+    let simulatorRuntimeID: String?
 
     init(
         id: UUID = UUID(),
@@ -84,7 +87,8 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
         reason: String,
         identity: FileIdentity = FileIdentity(device: 0, inode: 0),
         deletionMode: DeletionMode = .item,
-        generatedSnapshot: GeneratedCleanupSnapshot? = nil
+        generatedSnapshot: GeneratedCleanupSnapshot? = nil,
+        simulatorRuntimeID: String? = nil
     ) {
         self.id = id
         self.url = url
@@ -96,6 +100,7 @@ struct CleanupCandidate: Identifiable, Codable, Hashable, Sendable {
         self.identity = identity
         self.deletionMode = deletionMode
         self.generatedSnapshot = generatedSnapshot
+        self.simulatorRuntimeID = simulatorRuntimeID
     }
 }
 

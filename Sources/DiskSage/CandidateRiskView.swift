@@ -8,6 +8,7 @@ extension CleanupCandidate {
         case .generatedFiles: "Deletes only verified generated files from this scan. Source, test evidence, installed tool bundles, and the parent folder stay."
         case .simulatorDevices: "Refused: DiskSage deletes simulators one device at a time."
         case .simulatorDevice: "Deletes this one simulator device with simctl, including its installed apps and their data."
+        case .simulatorRuntime: "Deletes this one unused or unusable simulator runtime image with simctl. Xcode can download it again if needed."
         case .toolCommand: "Runs the tool's own cleanup command. The tool decides what to keep."
         case .projectCache: "Deletes this Git-ignored project cache folder after re-checking that it holds no tracked files, nested Git repositories, or active processes."
         }

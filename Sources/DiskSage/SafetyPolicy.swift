@@ -85,6 +85,20 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
+        if candidate.deletionMode == .simulatorRuntime {
+            // simctl removes the runtime image by UUID after SimulatorRuntimeInventory re-checks live state.
+            guard let runtimeID = candidate.simulatorRuntimeID,
+                  SimulatorDevice.isUDID(runtimeID),
+                  candidate.identity != FileIdentity(device: 0, inode: 0) else {
+                throw SafetyPolicyError.refused("A simulator runtime candidate must identify one runtime UUID.")
+            }
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+                throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            return
+        }
         if EcosystemCacheInventory.matching(url, home: home) != nil {
             // Contents only: keep the cache directory itself and never follow symlinks or allow Git checkouts.
             guard candidate.deletionMode == .contents, candidate.identity != FileIdentity(device: 0, inode: 0) else {
