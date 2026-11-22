@@ -10,6 +10,9 @@ struct DiskSageApp {
             MCPServer().run()
             return
         }
+        if let command = DiskSageCLI.parse(Array(CommandLine.arguments.dropFirst())) {
+            DiskSageCLI.writeAndExit(DiskSageCLI.runSynchronously(command))
+        }
         let app = NSApplication.shared
         let showOnboarding = MCPOnboardingPreferences.shouldAutoShow(hasExistingData: MCPOnboardingPreferences.hasExistingData)
         let delegate = DiskSageAppDelegate(model: AppModel(), showOnboardingAtLaunch: showOnboarding)
