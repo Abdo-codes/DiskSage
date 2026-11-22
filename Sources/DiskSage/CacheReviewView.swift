@@ -5,12 +5,16 @@ struct CacheReviewView: View {
     @Bindable var model: AppModel
     @State private var query = ""
     @State private var riskFilter: ReviewRiskFilter = .all
+    @State private var categoryFilter: ReviewCategoryFilter = .all
+    @State private var sortOrder: ReviewSortOrder = .largest
     @State private var visibleCandidates: [CleanupCandidate] = []
 
     var body: some View {
         VStack(spacing: 0) {
             ReviewHeader(model: model)
-            ReviewFilterBar(query: $query, risk: $riskFilter, visibleCount: visibleCandidates.count,
+            ReviewFilterBar(query: $query, risk: $riskFilter, category: $categoryFilter, sort: $sortOrder,
+                visibleCount: visibleCandidates.count,
+                visibleBytes: visibleCandidates.reduce(0) { $0 + $1.size },
                 totalCount: model.candidates.count, hasSelection: !model.selection.isEmpty,
                 canSelectLowRisk: visibleCandidates.contains { $0.risk == .low },
                 selectLowRisk: {
@@ -33,6 +37,8 @@ struct CacheReviewView: View {
         .onChange(of: model.candidates, initial: true) { _, _ in updateVisibleCandidates() }
         .onChange(of: query) { _, _ in updateVisibleCandidates() }
         .onChange(of: riskFilter) { _, _ in updateVisibleCandidates() }
+        .onChange(of: categoryFilter) { _, _ in updateVisibleCandidates() }
+        .onChange(of: sortOrder) { _, _ in updateVisibleCandidates() }
     }
 
     private var candidateTable: some View {
@@ -57,6 +63,7 @@ struct CacheReviewView: View {
                             .lineLimit(1)
                     }
                 }
+                .help(candidate.reason)
             }
             .width(min: 280, ideal: 420)
 
@@ -83,6 +90,21 @@ struct CacheReviewView: View {
             .width(70)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            let items = visibleCandidates.filter { ids.contains($0.id) }
+            if items.count == 1, let item = items.first {
+                Button("Reveal in Finder", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                }
+            }
+            if !items.isEmpty {
+                Button(items.count == 1 ? "Copy Path" : "Copy Paths", systemImage: "doc.on.doc") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(items.map(\.url.path).joined(separator: "\n"), forType: .string)
+                }
+            }
+        }
         .overlay {
             if visibleCandidates.isEmpty {
                 ContentUnavailableView(
@@ -103,7 +125,8 @@ struct CacheReviewView: View {
     }
 
     private func updateVisibleCandidates() {
-        visibleCandidates = ReviewFilter.candidates(model.candidates, query: query, risk: riskFilter)
+        visibleCandidates = ReviewFilter.candidates(model.candidates, query: query, risk: riskFilter,
+                                                    category: categoryFilter, sort: sortOrder)
     }
 
     private func color(for risk: RiskLevel) -> Color {

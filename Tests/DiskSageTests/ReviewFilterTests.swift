@@ -21,7 +21,22 @@ struct ReviewFilterTests {
         #expect(ReviewFilter.mergeSelection(selected, visibleSelection: [], visibleIDs: [visible, another]) == [hidden])
     }
 
-    private func candidate(_ name: String, path: String, risk: RiskLevel) -> CleanupCandidate {
-        CleanupCandidate(url: URL(fileURLWithPath: path), name: name, category: .build, size: 1, risk: risk, reason: "Fixture")
+    @Test func filtersByCategorySearchesCategoryTitleAndSortsDeterministically() {
+        let bigCache = candidate("Cargo registry", path: "/home/.cargo/registry", category: .cache, size: 500, risk: .low)
+        let smallBuild = candidate("Alpha build", path: "/home/dev/alpha/.build", category: .build, size: 100, risk: .low)
+        let sim = candidate("iPhone 16", path: "/home/sim/1", category: .simulator, size: 900, risk: .medium)
+        let items = [smallBuild, bigCache, sim]
+
+        #expect(ReviewFilter.candidates(items, query: "", risk: .all, category: .cache).map(\.id) == [bigCache.id])
+        #expect(ReviewFilter.candidates(items, query: "", risk: .all, category: .simulator).map(\.id) == [sim.id])
+        #expect(ReviewFilter.candidates(items, query: "simulator", risk: .all).map(\.id) == [sim.id])
+        #expect(ReviewFilter.candidates(items, query: "", risk: .all, sort: .largest).map(\.id) == [sim.id, bigCache.id, smallBuild.id])
+        #expect(ReviewFilter.candidates(items, query: "", risk: .all, sort: .name).map(\.id) == [smallBuild.id, bigCache.id, sim.id])
+        #expect(ReviewFilter.candidates(items, query: "", risk: .all, sort: .risk).map(\.id) == [bigCache.id, smallBuild.id, sim.id])
+    }
+
+    private func candidate(_ name: String, path: String, category: CandidateCategory = .build,
+                           size: Int64 = 1, risk: RiskLevel) -> CleanupCandidate {
+        CleanupCandidate(url: URL(fileURLWithPath: path), name: name, category: category, size: size, risk: risk, reason: "Fixture")
     }
 }
