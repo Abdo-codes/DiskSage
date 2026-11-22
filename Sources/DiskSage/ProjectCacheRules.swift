@@ -74,6 +74,7 @@ struct ProjectCacheRules: Sendable, Equatable {
         let base = CleanupPath.fileURL(root)
         guard dir.path.hasPrefix(base.path + "/") else { return nil }
         let relative = String(dir.path.dropFirst(base.path.count + 1))
+        guard !relative.split(separator: "/").contains(where: { skip.contains(String($0)) }) else { return nil }
         return match(relativePath: relative) { holderRel, marker in
             let holderURL = holderRel.isEmpty ? base : base.appending(path: holderRel, directoryHint: .isDirectory)
             return Self.directoryHasEntry(holderURL, matching: marker)

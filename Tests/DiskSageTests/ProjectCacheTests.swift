@@ -142,4 +142,33 @@ struct ProjectCacheTests {
         ])
         #expect(Set(found.map(\.url)) == expected)
     }
+
+    @Test func checksQuietPeriodAgainstEachCachesOwningNestedRepository() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let outer = f.base.appending(path: "Developer/mono")
+        let inner = outer.appending(path: "packages/sub")
+        try initGitProject(at: outer, gitignore: "node_modules/\npackages/sub/\n")
+        try initGitProject(at: inner, gitignore: "node_modules/\n")
+        try f.write("Developer/mono/node_modules/a/index.js", bytes: 8_192)
+        try f.write("Developer/mono/packages/sub/node_modules/b/index.js", bytes: 8_192)
+
+        let quietNow = f.later(hours: 30)
+        // Make ONLY the nested repository active (2 hours before quietNow); outer stays quiet.
+        let recent = f.later(hours: 28)
+        let innerHeadLog = inner.appending(path: ".git/logs/HEAD")
+        try FileManager.default.setAttributes([.modificationDate: recent], ofItemAtPath: innerHeadLog.path)
+
+        let onlyOuter = ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1)
+        #expect(onlyOuter.map(\.url) == [CleanupPath.fileURL(outer.appending(path: "node_modules"))])
+
+        // Reverse: make outer active while inner becomes quiet (at 60h, outer touched at 58h).
+        let laterNow = f.later(hours: 60)
+        let outerHeadLog = outer.appending(path: ".git/logs/HEAD")
+        try FileManager.default.setAttributes([.modificationDate: f.later(hours: 58)], ofItemAtPath: outerHeadLog.path)
+
+        let onlyInner = ProjectCacheInventory.candidates(activity: .idle, now: laterNow, home: f.base, minimumBytes: 1)
+        let innerCache = try #require(onlyInner.first)
+        #expect(onlyInner.map(\.url) == [CleanupPath.fileURL(inner.appending(path: "node_modules"))])
+        try ProjectCacheInventory.verifyBeforeDeletion(innerCache, activity: .idle, now: laterNow, home: f.base)
+    }
 }

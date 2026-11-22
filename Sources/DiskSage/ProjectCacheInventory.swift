@@ -65,19 +65,26 @@ enum ProjectCacheInventory {
                             git: WorktreeGitProcess = WorktreeGitProcess()) -> [CleanupCandidate] {
         let root = CleanupPath.fileURL(projectRoot)
         guard TemporaryBuildOutput.isRealDirectory(root) else { return [] }
-        let resolvedClaudeDir = claudeDir ?? defaultClaudeProjectsDirectory(home: home)
-        let folders = claudeFolders ?? listSubdirectories(resolvedClaudeDir)
-        guard let lastActivity = projectLastActivity(root: root, claudeDir: resolvedClaudeDir,
-                                                     claudeFolders: folders, git: git),
-              isQuiet(lastActivity: lastActivity, now: now, quietHours: rules.quietHours) else { return [] }
-
         let (matched, nestedRepos) = walkProject(root: root, rules: rules)
         guard !matched.isEmpty else { return [] }
+
+        let resolvedClaudeDir = claudeDir ?? defaultClaudeProjectsDirectory(home: home)
+        let folders = claudeFolders ?? listSubdirectories(resolvedClaudeDir)
+        var activityByRepo: [String: Date?] = [:]
+        func owningActivity(for repo: URL) -> Date? {
+            if let cached = activityByRepo[repo.path] { return cached }
+            let computed = projectLastActivity(root: repo, claudeDir: resolvedClaudeDir,
+                                               claudeFolders: folders, git: git)
+            activityByRepo[repo.path] = computed
+            return computed
+        }
 
         var candidates: [CleanupCandidate] = []
         for (url, match) in matched {
             guard !Task.isCancelled, !activity.contains(url) else { continue }
             let repo = innermostRepo(for: url, root: root, nestedRepos: nestedRepos)
+            guard let lastActivity = owningActivity(for: repo),
+                  isQuiet(lastActivity: lastActivity, now: now, quietHours: rules.quietHours) else { continue }
             guard (try? verifyGitIgnoredAndUntracked(cacheURL: url, repoRoot: repo, git: git)) != nil else { continue }
             guard (try? ProjectCacheRules.refuseInsideViolation(in: url, patterns: match.refuseInside)) == nil else { continue }
             guard let survey = try? FolderSurvey.read(url, gitAllowedUnder: []),
@@ -198,16 +205,16 @@ enum ProjectCacheInventory {
             guard TemporaryBuildOutput.isRealDirectory(url), url.path.hasPrefix(root.path + "/") else {
                 walker.skipDescendants(); continue
             }
+            if rules.skip.contains(url.lastPathComponent) {
+                walker.skipDescendants()
+                continue
+            }
             let relative = String(url.path.dropFirst(root.path.count + 1))
             if let hit = rules.match(relativePath: relative, hasMarker: { holderRel, marker in
                 let holder = holderRel.isEmpty ? root : root.appending(path: holderRel, directoryHint: .isDirectory)
                 return ProjectCacheRules.directoryHasEntry(holder, matching: marker)
             }) {
                 matched.append((url, hit))
-                walker.skipDescendants()
-                continue
-            }
-            if rules.skip.contains(url.lastPathComponent) {
                 walker.skipDescendants()
                 continue
             }
