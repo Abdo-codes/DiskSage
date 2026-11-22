@@ -9,6 +9,7 @@ enum EcosystemCacheInventory {
     struct Rule: Sendable, Equatable {
         let name: String
         let folder: URL
+        let risk: RiskLevel
         /// Any entry with one of these names anywhere below `folder` blocks cleanup.
         let refuseNames: Set<String>
         /// Running process names that make cleanup unsafe even without an open file in `folder`.
@@ -24,20 +25,41 @@ enum EcosystemCacheInventory {
         return [
             Rule(name: "Cargo registry cache",
                  folder: home.appending(path: ".cargo/registry", directoryHint: .isDirectory),
+                 risk: .low,
                  refuseNames: [],
                  blockedCommands: ["cargo", "rustc", "rust-analyzer"],
                  reason: "Downloaded crate archives and extracted registry sources in `~/.cargo/registry`. Cargo downloads them again; `~/.cargo/git`, `bin`, and credentials stay."),
             Rule(name: "Gradle global cache",
                  folder: home.appending(path: ".gradle/caches", directoryHint: .isDirectory),
+                 risk: .low,
                  refuseNames: [],
                  blockedCommands: ["gradle", "gradlew"],
                  reason: "Downloaded dependencies, transforms, and build caches in `~/.gradle/caches`. Gradle rebuilds them; `gradle.properties`, `wrapper`, `jdks`, and `init.d` stay."),
             Rule(name: "Maven local repository",
                  folder: home.appending(path: ".m2/repository", directoryHint: .isDirectory),
+                 risk: .low,
                  // `mvn install` writes maven-metadata-local.xml for local-only artifacts that no remote holds.
                  refuseNames: ["maven-metadata-local.xml"],
                  blockedCommands: ["mvn", "mvnw"],
                  reason: "Downloaded artifacts in `~/.m2/repository` with no local-only `maven-metadata-local.xml` files. Maven downloads them again; `~/.m2/settings.xml` stays."),
+            Rule(name: "CocoaPods cache",
+                 folder: home.appending(path: "Library/Caches/CocoaPods", directoryHint: .isDirectory),
+                 risk: .low,
+                 refuseNames: [],
+                 blockedCommands: ["pod"],
+                 reason: "Downloaded pod archives and specs in `~/Library/Caches/CocoaPods`. CocoaPods downloads them again on `pod install`."),
+            Rule(name: "Playwright browsers",
+                 folder: home.appending(path: "Library/Caches/ms-playwright", directoryHint: .isDirectory),
+                 risk: .medium,
+                 refuseNames: [],
+                 blockedCommands: ["playwright"],
+                 reason: "Downloaded browser binaries in `~/Library/Caches/ms-playwright`. Re-run `playwright install` to restore them."),
+            Rule(name: "Puppeteer browsers",
+                 folder: home.appending(path: ".cache/puppeteer", directoryHint: .isDirectory),
+                 risk: .medium,
+                 refuseNames: [],
+                 blockedCommands: ["puppeteer"],
+                 reason: "Downloaded browser binaries in `~/.cache/puppeteer`. Puppeteer downloads them again when reinstalled."),
         ]
     }
 
@@ -66,7 +88,7 @@ enum EcosystemCacheInventory {
               (try? verifyNoRefusedNames(in: url, refused: rule.refuseNames)) != nil,
               let identity = identity(of: url) else { return nil }
         let candidate = CleanupCandidate(url: url, name: rule.name, category: .cache, size: survey.bytes,
-                                         risk: .low, reason: rule.reason, identity: identity, deletionMode: .contents)
+                                         risk: rule.risk, reason: rule.reason, identity: identity, deletionMode: .contents)
         guard (try? SafetyPolicy(home: home, now: now).validate(candidate)) != nil else { return nil }
         return candidate
     }
