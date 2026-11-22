@@ -14,7 +14,9 @@ enum ToolCacheInventory {
 
     static let process: Run = { executable, arguments, environment in
         do {
-            let output = try WorktreeGitProcess().execute(executable, arguments, timeout: timeout, environment: environment)
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let output = try WorktreeGitProcess().execute(executable, arguments, timeout: timeout,
+                                                          environment: environment, workingDirectory: home)
             return (output.code, output.data)
         } catch let error as FeatureFailure {
             throw FeatureFailure(message: "\(error.message) The cache can be in use. Try again later.")
@@ -39,13 +41,15 @@ enum ToolCacheInventory {
             guard !Task.isCancelled, let executable = tool.executables.first(where: trusted),
                   TemporaryBuildOutput.isRealDirectory(tool.folder), !activity.contains(tool.folder),
                   let identity = identity(of: tool.folder),
-                  let bytes = estimate(tool, executable: executable, run: run, size: size), bytes >= minimumBytes else { return nil }
+                  preflightFailure(for: tool, executable: executable, run: run) == nil,
+                  let bytes = estimate(tool, executable: executable, run: run, size: size),
+                  bytes >= minimumBytes else { return nil }
             return CleanupCandidate(url: tool.folder, name: tool.name, category: .cache, size: bytes, risk: .low,
                                     reason: tool.reason, identity: identity, deletionMode: .toolCommand)
         }
     }
 
-    /// Runs right before cleaning: the folder must still be a known tool cache that no process uses.
+    /// Runs right before cleaning: the folder must still be a known tool cache that passes its checks and is idle.
     static func clean(_ candidate: CleanupCandidate, activity: CleanupActivity,
                       home: URL = FileManager.default.homeDirectoryForCurrentUser,
                       trusted: Trusted = isTrusted, run: Run = process) throws {
@@ -56,8 +60,23 @@ enum ToolCacheInventory {
             throw FeatureFailure(message: "\(tool.name): the tool is no longer installed. Nothing was deleted.")
         }
         try activity.requireIdle(candidate.url)
+        if let refusal = preflightFailure(for: tool, executable: executable, run: run) {
+            throw FeatureFailure(message: "\(tool.name): \(refusal) Nothing was deleted.")
+        }
         let code = try run(executable, tool.arguments, tool.environment).code
         guard code == 0 else { throw FeatureFailure(message: "\(tool.name): the cleanup command stopped with code \(code).") }
+    }
+
+    private static func preflightFailure(for tool: ToolCache, executable: String, run: Run) -> String? {
+        for check in tool.preflightChecks {
+            guard let output = try? run(executable, check.arguments, tool.environment) else {
+                return check.refusalReason
+            }
+            if let failure = check.evaluate(code: output.code, text: String(decoding: output.data, as: UTF8.self)) {
+                return failure
+            }
+        }
+        return nil
     }
 
     /// What the command will free: the tool's own dry run when it has one, else the folder size.

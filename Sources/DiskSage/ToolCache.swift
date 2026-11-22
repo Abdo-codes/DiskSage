@@ -1,9 +1,32 @@
 import Foundation
 
-/// A tool that cleans its own cache. DiskSage runs the tool's own command, so the tool
-/// decides what to keep and waits for its own locks. The command comes from this list only,
-/// never from a candidate.
+/// A tool that cleans its own cache. DiskSage runs the tool's own command from the home
+/// directory without a shell, so the tool decides what to keep and project configs do not apply.
+/// Commands come from this allowlist only, never from a candidate.
 struct ToolCache: Sendable, Equatable {
+    /// A read-only check that must pass before offering or running the cleanup command.
+    struct PreflightCheck: Sendable, Equatable {
+        let arguments: [String]
+        let requirePattern: String?
+        let refusePattern: String?
+        let refusalReason: String
+
+        /// Returns nil when the output satisfies the check, or a user-facing reason when it fails.
+        func evaluate(code: Int32, text: String) -> String? {
+            guard code == 0 else { return refusalReason }
+            let cleaned = text.replacingOccurrences(of: #"\u{001B}\[[0-9;?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+            let lines = cleaned.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let requirePattern {
+                let matches = lines.filter { $0.range(of: requirePattern, options: .regularExpression) != nil }
+                guard matches.count == 1 else { return refusalReason }
+            }
+            if let refusePattern, lines.contains(where: { $0.range(of: refusePattern, options: .regularExpression) != nil }) {
+                return refusalReason
+            }
+            return nil
+        }
+    }
+
     let name: String
     let folder: URL
     /// Absolute paths, in order of preference. DiskSage never searches `PATH`.
@@ -12,12 +35,18 @@ struct ToolCache: Sendable, Equatable {
     /// A read-only run that reports what the command would free. Without it, the whole folder is the estimate.
     let estimateArguments: [String]?
     let environment: [String: String]
+    let preflightChecks: [PreflightCheck]
     let reason: String
 
     static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [ToolCache] {
         let home = CleanupPath.fileURL(home)
         let brew = home.appending(path: "Library/Caches/Homebrew", directoryHint: .isDirectory)
         let uv = home.appending(path: ".cache/uv", directoryHint: .isDirectory)
+        let mise = home.appending(path: "Library/Caches/mise", directoryHint: .isDirectory)
+        let pnpm = home.appending(path: "Library/pnpm/store", directoryHint: .isDirectory)
+        let pip = home.appending(path: "Library/Caches/pip", directoryHint: .isDirectory)
+        let bun = home.appending(path: ".bun/install/cache", directoryHint: .isDirectory)
+        let yarn = home.appending(path: "Library/Caches/Yarn", directoryHint: .isDirectory)
         return [
             ToolCache(name: "Homebrew downloads", folder: brew,
                       executables: ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
@@ -28,6 +57,7 @@ struct ToolCache: Sendable, Equatable {
                                     "HOMEBREW_NO_ANALYTICS": "1", "HOMEBREW_NO_ENV_HINTS": "1",
                                     // Cleanup must never uninstall unused dependencies.
                                     "HOMEBREW_NO_AUTOREMOVE": "1"],
+                      preflightChecks: [],
                       reason: "Homebrew downloads and old versions of installed packages. `brew cleanup -s` removes them; Homebrew downloads them again when needed."),
             ToolCache(name: "uv package cache", folder: uv,
                       executables: ["/opt/homebrew/bin/uv", "/usr/local/bin/uv",
@@ -35,7 +65,59 @@ struct ToolCache: Sendable, Equatable {
                       arguments: ["cache", "clean", "--cache-dir", uv.path],
                       estimateArguments: nil,
                       environment: [:],
+                      preflightChecks: [],
                       reason: "Python packages that uv downloaded. `uv cache clean` waits until no uv process uses the cache; uv downloads the packages again when needed."),
+            ToolCache(name: "mise download cache", folder: mise,
+                      executables: ["/opt/homebrew/bin/mise", "/usr/local/bin/mise",
+                                    home.appending(path: ".local/bin/mise").path, home.appending(path: ".cargo/bin/mise").path],
+                      arguments: ["cache", "prune"],
+                      estimateArguments: nil,
+                      environment: ["MISE_CACHE_DIR": mise.path],
+                      preflightChecks: [],
+                      reason: "Stale download archives cached by mise. `mise cache prune` removes unused archives and keeps installed tool versions."),
+            ToolCache(name: "pnpm package store", folder: pnpm,
+                      executables: ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm",
+                                    home.appending(path: "Library/pnpm/pnpm").path,
+                                    home.appending(path: ".local/share/pnpm/pnpm").path,
+                                    home.appending(path: ".volta/bin/pnpm").path],
+                      arguments: ["store", "prune"],
+                      estimateArguments: nil,
+                      environment: ["npm_config_store_dir": pnpm.path],
+                      preflightChecks: [],
+                      reason: "Unreferenced packages in the pnpm store. `pnpm store prune` removes only unused packages; projects keep their dependencies."),
+            ToolCache(name: "pip package cache", folder: pip,
+                      executables: ["/opt/homebrew/bin/pip3", "/usr/local/bin/pip3", "/usr/bin/pip3"],
+                      arguments: ["cache", "purge"],
+                      estimateArguments: nil,
+                      environment: ["PIP_CACHE_DIR": pip.path],
+                      preflightChecks: [],
+                      reason: "Python wheels and source archives cached by pip. `pip3 cache purge` removes them; pip downloads packages again when needed."),
+            ToolCache(name: "Bun package cache", folder: bun,
+                      executables: [home.appending(path: ".bun/bin/bun").path,
+                                    "/opt/homebrew/bin/bun", "/usr/local/bin/bun"],
+                      arguments: ["pm", "cache", "prune"],
+                      estimateArguments: nil,
+                      environment: ["BUN_INSTALL_CACHE_DIR": bun.path],
+                      // Bun added `pm cache prune` in 1.4.4; older versions have no safe prune subcommand.
+                      preflightChecks: [PreflightCheck(
+                          arguments: ["--version"],
+                          requirePattern: #"^[0-9]+\.[0-9]+\.[0-9]+"#,
+                          refusePattern: #"^(0\.|1\.[0-3]\.|1\.4\.[0-3]([^0-9]|$))"#,
+                          refusalReason: "Bun before 1.4.4 does not support `bun pm cache prune`.")],
+                      reason: "Older package folders cached by Bun. `bun pm cache prune` removes stale packages while keeping global store links."),
+            ToolCache(name: "Yarn 1 package cache", folder: yarn,
+                      executables: ["/opt/homebrew/bin/yarn", "/usr/local/bin/yarn",
+                                    home.appending(path: ".volta/bin/yarn").path],
+                      arguments: ["cache", "clean", "--cache-folder", yarn.path],
+                      estimateArguments: nil,
+                      environment: [:],
+                      // Yarn 2+ can store zero-install caches inside Git repositories, so only Yarn 1 uses this folder.
+                      preflightChecks: [PreflightCheck(
+                          arguments: ["--version"],
+                          requirePattern: #"^[0-9]+\.[0-9]+\.[0-9]+"#,
+                          refusePattern: #"^(0|[2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+"#,
+                          refusalReason: "Only Yarn 1 uses this global cache folder.")],
+                      reason: "Node packages cached by Yarn 1. `yarn cache clean` removes them; Yarn downloads packages again when needed."),
         ]
     }
 
