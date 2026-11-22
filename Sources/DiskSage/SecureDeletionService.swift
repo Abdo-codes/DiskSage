@@ -45,6 +45,7 @@ struct CleanupService: Sendable {
              // Read the kind before the policy check. A folder that stops matching after the check,
              // such as older device symbols whose newer version was deleted, still gets the full check and fails it.
              let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url) != nil
+             let ecosystemCache = candidate.deletionMode == .contents && EcosystemCacheInventory.matching(candidate.url) != nil
              try SafetyPolicy().validate(candidate)
              if candidate.deletionMode == .generatedFiles {
                  return try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
@@ -55,7 +56,9 @@ struct CleanupService: Sendable {
              } else {
                  let activity = try CleanupActivity.capture()
                  try activity.requireIdle(candidate.url)
-                 if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url) != nil {
+                 if ecosystemCache || EcosystemCacheInventory.matching(candidate.url) != nil {
+                     try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: activity)
+                 } else if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url) != nil {
                      try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity)
                  }
                  try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
