@@ -256,4 +256,33 @@ struct MiseAndCustomRulesTests {
             }
         }
     }
+
+    @Test func saveEnforcesMaximumFileSizeAndPreservesExistingRulesWhenOversized() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+
+        // Compact-eligible near-limit config (pretty-printed > 1 MiB, compact <= 1 MiB) saves compactly and reloads.
+        let nearLimit = ProjectCacheRulesLoader.UserConfig(
+            skip: Array(repeating: "archive", count: 100_000),
+            quietHours: 48
+        )
+        try ProjectCacheRulesLoader.save(nearLimit, to: rulesFile, home: f.base)
+        let savedSize = try FileManager.default.attributesOfItem(atPath: rulesFile.path)[.size] as? NSNumber
+        #expect((savedSize?.int64Value ?? .max) <= Int64(ProjectCacheRulesLoader.maximumFileBytes))
+        let reloaded = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reloaded.quietHours == 48)
+        #expect(reloaded.skip?.count == 100_000)
+
+        // Truly oversized config (> 1 MiB even when compact) throws and leaves the existing rules file intact.
+        let oversized = ProjectCacheRulesLoader.UserConfig(
+            skip: Array(repeating: "archive", count: 120_000),
+            quietHours: 72
+        )
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(oversized, to: rulesFile, home: f.base)
+        }
+        let stillIntact = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(stillIntact.quietHours == 48)
+        #expect(stillIntact.skip?.count == 100_000)
+    }
 }

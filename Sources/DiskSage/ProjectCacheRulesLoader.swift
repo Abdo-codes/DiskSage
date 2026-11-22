@@ -126,6 +126,7 @@ enum ProjectCacheRulesLoader {
                      home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
         _ = try merge(base: .default, document: config)
         _ = try validatedExtraRoots(config.extraRoots ?? [], home: home)
+        let data = try encode(config)
         try rejectSymlinkedAncestors(of: url)
 
         var existing = stat()
@@ -142,9 +143,6 @@ enum ProjectCacheRulesLoader {
                                                 attributes: [.posixPermissions: 0o700])
         try rejectSymlinkedAncestors(of: url)
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(config) + Data("\n".utf8)
         let temp = parent.appending(path: ".rules-\(UUID().uuidString).tmp")
         guard FileManager.default.createFile(atPath: temp.path, contents: data,
                                              attributes: [.posixPermissions: 0o600]) else {
@@ -155,6 +153,21 @@ enum ProjectCacheRulesLoader {
             try? FileManager.default.removeItem(at: temp)
             throw FeatureFailure(message: "Could not save custom rules: \(String(cString: strerror(code))).")
         }
+    }
+
+    private static func encode(_ config: UserConfig) throws -> Data {
+        let pretty = JSONEncoder()
+        pretty.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var data = try pretty.encode(config) + Data("\n".utf8)
+        if Int64(data.count) > Int64(maximumFileBytes) {
+            let compact = JSONEncoder()
+            compact.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            data = try compact.encode(config) + Data("\n".utf8)
+        }
+        guard Int64(data.count) <= Int64(maximumFileBytes) else {
+            throw FeatureFailure(message: "Custom rules exceed the 1 MiB file size limit.")
+        }
+        return data
     }
 
     static func invalidExtraRoots(_ entries: [String],
