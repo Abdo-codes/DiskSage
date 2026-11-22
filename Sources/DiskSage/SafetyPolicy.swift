@@ -69,6 +69,20 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
+        if EcosystemCacheInventory.matching(url, home: home) != nil {
+            // Contents only: keep the cache directory itself and never follow symlinks or allow Git checkouts.
+            guard candidate.deletionMode == .contents, candidate.identity != FileIdentity(device: 0, inode: 0) else {
+                throw SafetyPolicyError.refused("Ecosystem caches remove only their contents.")
+            }
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+                throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            do { try WorktreePathGuard.rejectSourceContainers(url) }
+            catch { throw SafetyPolicyError.refused(error.localizedDescription) }
+            return
+        }
         if TemporaryBuildOutput.kind(of: url, home: home) != nil {
             // Whole temporary build folders. Git data, age, sessions and activity are checked by
             // TemporaryBuildInspector when the candidate is made and again right before deletion.
