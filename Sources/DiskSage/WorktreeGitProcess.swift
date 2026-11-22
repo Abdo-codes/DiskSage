@@ -33,11 +33,13 @@ struct WorktreeGitProcess: Sendable {
     /// `environment` adds to the fixed environment. A run that is still going after `timeout` seconds is stopped.
     /// The output stays in memory, so a full disk cannot break a check. `outputLimit` is the largest accepted output.
     func execute(_ executable: String, _ args: [String], allowTermination: Bool = true, timeout: TimeInterval = 20,
-                 environment: [String: String] = [:], outputLimit: Int = 8_000_000) throws -> Output {
+                 environment: [String: String] = [:], outputLimit: Int = 8_000_000,
+                 workingDirectory: URL? = nil) throws -> Output {
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
+        if let workingDirectory { process.currentDirectoryURL = workingDirectory }
         process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
             "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
