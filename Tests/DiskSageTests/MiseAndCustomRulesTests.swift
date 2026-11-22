@@ -153,4 +153,25 @@ struct MiseAndCustomRulesTests {
                                                      minimumBytes: 1, miseEnv: env)
         #expect(found.map(\.url) == [CleanupPath.fileURL(deepProject.appending(path: "node_modules"))])
     }
+
+    @Test func resolvesOwningRepoForNestedMiseSubdirectoryWithoutWideningScope() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let monorepo = f.base.appending(path: "code/monorepo")
+        try initGitProject(at: monorepo, gitignore: "node_modules/\n")
+        // Only the `frontend` subdirectory has a tracked mise.toml; `.git` lives at `monorepo/.git`.
+        let frontendConfig = try f.write("code/monorepo/frontend/mise.toml", bytes: 32)
+        try f.write("code/monorepo/frontend/node_modules/pkg/index.js", bytes: 8_192)
+        try f.write("code/monorepo/backend/node_modules/pkg/index.js", bytes: 8_192)
+        let tracked = try f.folder(".local/state/mise/tracked-configs")
+        try FileManager.default.createSymbolicLink(at: tracked.appending(path: "fe"), withDestinationURL: frontendConfig)
+
+        let env = MiseProjectDiscovery.Environment(home: CleanupPath.fileURL(f.base))
+        let quietNow = f.later(hours: 30)
+        let found = ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base,
+                                                     minimumBytes: 1, miseEnv: env)
+        // Only the mise-tracked `frontend` cache is offered; untracked sibling `backend` stays untouched.
+        let frontendCache = try #require(found.first)
+        #expect(found.map(\.url) == [CleanupPath.fileURL(monorepo.appending(path: "frontend/node_modules"))])
+        try ProjectCacheInventory.verifyBeforeDeletion(frontendCache, activity: .idle, now: quietNow, home: f.base)
+    }
 }
