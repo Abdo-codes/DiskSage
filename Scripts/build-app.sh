@@ -33,9 +33,12 @@ for resource_bundle in "$(dirname -- "$binary_path")"/*.bundle; do
   ditto "$resource_bundle" "$contents_path/Resources/$(basename -- "$resource_bundle")"
 done
 
-"$project_dir/Scripts/build-icon.sh" "$contents_path/Resources/AppIcon.icns"
+"$project_dir/Scripts/build-icon.sh" "$contents_path/Resources/AppIcon.icns" "$contents_path/Resources"
 
 sed "s/__VERSION__/$version/g" "$project_dir/Resources/Info.plist.template" > "$contents_path/Info.plist"
+if [[ -f "$contents_path/Resources/Assets.car" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$contents_path/Info.plist" >/dev/null
+fi
 plutil -lint "$contents_path/Info.plist" >/dev/null
 codesign --force --deep --sign - "$app_path"
 

@@ -1,0 +1,42 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.12941,0.32941,0.24706,1.00000",
+      "srgb:0.02745,0.10196,0.07451,1.00000"
+    ]
+  },
+  "fill-specializations" : [
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.09020,0.23529,0.17647,1.00000",
+          "srgb:0.01961,0.07059,0.05098,1.00000"
+        ]
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "DiskSageDrive.png",
+          "name" : "DiskSage Drive"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.45
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

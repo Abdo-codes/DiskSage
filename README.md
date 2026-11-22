@@ -1,6 +1,10 @@
 # DiskSage
 
-![DiskSage — Developer disk cleanup for macOS](Resources/Branding/DiskSage-banner.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/Branding/DiskSage-banner-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Resources/Branding/DiskSage-banner-light.png">
+  <img alt="DiskSage — Safe developer disk cleanup for macOS" src="Resources/Branding/DiskSage-banner.png">
+</picture>
 
 A native macOS menu-bar app for finding developer build artifacts and caches,
 reviewing cleanup decisions, and seeing exactly what was removed.
@@ -63,7 +67,7 @@ Then open the app:
 open .build/release/DiskSage.app
 ```
 
-Click the menu-bar drive icon, scan, and choose **Review items**. Reopening
+Click the DiskSage menu-bar icon, scan, and choose **Review items**. Reopening
 DiskSage from Applications also reveals the dashboard. To use launch at login or
 connect external agents, copy the built app to `/Applications/DiskSage.app`.
 
@@ -360,9 +364,12 @@ races. `AppModel` is a temporary view adapter; AppKit owns native window placeme
 while review filters and settings retain their current local state/preferences.
 Irreversible cleanup effects remain owned by the persistent root store.
 
-The icon master is [Resources/AppIcon.png](Resources/AppIcon.png).
-`Scripts/build-icon.sh` produces the macOS ICNS representations; the app build
-includes the icon and SwiftPM resource bundles before signing.
+The icon masters are [Resources/AppIcon.png](Resources/AppIcon.png) (1024×1024
+macOS HIG master) and [Resources/AppIcon.icon](Resources/AppIcon.icon) (macOS 26+
+Liquid Glass Icon Composer bundle), with adaptive banners and the vector mark in
+[Resources/Branding](Resources/Branding). `Scripts/build-icon.sh` produces both
+`AppIcon.icns` and (when Xcode's `actool` is available) `Assets.car`; the app
+build includes the icons and SwiftPM resource bundles before signing.
 
 ## Contributing and license
 

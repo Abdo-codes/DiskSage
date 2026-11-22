@@ -111,7 +111,7 @@ private struct DashboardHeader: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: "externaldrive.badge.checkmark").font(.title2).accessibilityHidden(true)
+            BrandIconBadge(size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text("DiskSage").font(.headline)
                 Text(status).font(.caption).foregroundStyle(DashboardTheme.muted).lineLimit(1).help(status)
@@ -139,6 +139,7 @@ private struct DashboardFooter: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: automaticCleanupEnabled ? "checkmark.shield" : "pause.circle")
+                .foregroundStyle(automaticCleanupEnabled ? DashboardTheme.brandSage : .secondary)
                 .accessibilityHidden(true)
             if automaticCleanupEnabled {
                 Text("Low-disk auto below \(cleanupThresholdGiB) GiB")

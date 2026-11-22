@@ -29,7 +29,7 @@ private struct DiskUsageRing: View {
         ZStack {
             Circle().stroke(Color.accentColor, lineWidth: 8)
             Circle().trim(from: usage.usedFraction, to: 1)
-                .stroke(Color.green, lineWidth: 8).rotationEffect(.degrees(-90))
+                .stroke(DashboardTheme.brandSage, lineWidth: 8).rotationEffect(.degrees(-90))
             VStack(spacing: 1) {
                 Text(usage.usedFraction, format: .percent.precision(.fractionLength(0)))
                     .font(.headline)
@@ -64,9 +64,9 @@ struct CleanupOverviewCard: View {
             }
             HStack(spacing: 18) {
                 RiskEstimate(label: "Low risk", bytes: breakdown.lowRiskBytes,
-                             symbol: "checkmark.shield", color: .green, hasResults: count > 0)
+                             symbol: "checkmark.shield", color: DashboardTheme.brandSage, hasResults: count > 0)
                 RiskEstimate(label: "Needs careful review", bytes: breakdown.reviewBytes,
-                             symbol: "hand.raised", color: .orange, hasResults: count > 0)
+                             symbol: "hand.raised", color: DashboardTheme.amber, hasResults: count > 0)
             }
             CategoryBar(categories: breakdown.categories, totalBytes: breakdown.totalBytes)
             if count > 0 {

@@ -62,11 +62,22 @@ private struct OnboardingHeader: View {
     let step: MCPOnboardingView.Step
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Welcome to DiskSage").font(.title2.weight(.semibold))
+            HStack(spacing: 12) {
+                BrandIconBadge(size: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Welcome to DiskSage").font(.title2.weight(.semibold))
+                    Text("Safe developer disk cleanup for macOS")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
             HStack(spacing: 20) {
                 ForEach(MCPOnboardingView.Step.allCases) { item in
+                    let completed = item.rawValue < step.rawValue
                     Label { Text(item.title) } icon: {
-                        Image(systemName: item.rawValue < step.rawValue ? "checkmark.circle.fill" : "\(item.rawValue + 1).circle")
+                        Image(systemName: completed ? "checkmark.circle.fill" : "\(item.rawValue + 1).circle")
+                            .foregroundStyle(completed
+                                ? AnyShapeStyle(DashboardTheme.brandSage)
+                                : (item == step ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)))
                     }
                     .foregroundStyle(item == step ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 }
