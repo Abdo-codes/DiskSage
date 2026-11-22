@@ -76,7 +76,7 @@ struct SafetyPolicy: Sendable {
         }
         if candidate.deletionMode == .simulatorDevice {
             // simctl removes the folder. SimulatorInventory checks the state and activity again before deletion.
-            guard url.deletingLastPathComponent() == SimulatorInventory.devicesRoot(home: home),
+            guard SimulatorInventory.deviceSet(for: url, home: home) != nil,
                   SimulatorDevice.isUDID(url.lastPathComponent),
                   candidate.identity != FileIdentity(device: 0, inode: 0) else {
                 throw SafetyPolicyError.refused("A simulator candidate must be one device folder.")

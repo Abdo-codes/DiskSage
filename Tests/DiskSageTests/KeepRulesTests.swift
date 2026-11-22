@@ -46,7 +46,7 @@ struct KeepRulesTests {
         let rules = KeepRules(simulatorNames: ["lane-*"])
         #expect(SimulatorInventory.candidates(activity: .idle, home: f.base, keep: rules, run: run).isEmpty)
         let offered = try #require(SimulatorInventory.candidates(activity: .idle, home: f.base, keep: KeepRules(), run: run).first)
-        #expect(throws: (any Error).self) { try SimulatorInventory.delete(offered, activity: .idle, keep: rules, run: run) }
+        #expect(throws: (any Error).self) { try SimulatorInventory.delete(offered, activity: .idle, keep: rules, home: f.base, run: run) }
     }
 
     @Test func agentFoldersWithVideosAreHighRisk() throws {
@@ -109,6 +109,12 @@ struct KeepRulesTests {
         let failing: SimulatorInventory.Run = { _ in (1, Data()) }
         #expect(throws: (any Error).self) {
             try ScheduledFolderPolicy.validate(try schedule("\(devices)/\(other)/data"), keep: rules, home: f.base, simctl: failing)
+        }
+        // Kept preview simulators are protected identically.
+        let previews = "Library/Developer/Xcode/UserData/Previews/Simulator Devices"
+        try f.write("\(previews)/\(kept)/data/preview.bin")
+        #expect(throws: (any Error).self) {
+            try ScheduledFolderPolicy.validate(try schedule("\(previews)/\(kept)/data"), keep: rules, home: f.base, simctl: run)
         }
     }
 }

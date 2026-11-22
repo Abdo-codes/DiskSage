@@ -50,11 +50,17 @@ enum ScheduledFolderPolicy {
             throw SafetyPolicyError.refused("A keep rule in Settings protects this folder or something inside it.")
         }
         // A schedule over simulator data must not reach a device whose name is kept. If simctl fails, nothing is deleted.
-        if !keep.simulatorNames.isEmpty,
-           KeepRules(paths: [SimulatorInventory.devicesRoot(home: home).path]).keeps(schedule.folder) {
-            let kept = try SimulatorInventory.keptDeviceFolders(keep, home: home, run: simctl)
-            guard !KeepRules(paths: kept.map(\.path)).keeps(schedule.folder) else {
-                throw SafetyPolicyError.refused("A keep rule in Settings protects a simulator in this folder.")
+        if !keep.simulatorNames.isEmpty {
+            let matchingSets = SimulatorInventory.DeviceSet.allCases.filter {
+                KeepRules(paths: [$0.root(home: home).path]).keeps(schedule.folder)
+            }
+            if !matchingSets.isEmpty {
+                let kept = try matchingSets.flatMap {
+                    try SimulatorInventory.keptDeviceFolders(keep, in: $0, home: home, run: simctl)
+                }
+                guard !KeepRules(paths: kept.map(\.path)).keeps(schedule.folder) else {
+                    throw SafetyPolicyError.refused("A keep rule in Settings protects a simulator in this folder.")
+                }
             }
         }
         guard try identity(of: schedule.folder, scope: schedule.scope) == schedule.folderIdentity else {
