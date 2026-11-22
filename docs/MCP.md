@@ -28,6 +28,7 @@ Check `isError` before parsing: connection errors can contain only text.
 | Preview/request checkout removal (native confirmation always) | `preview_worktree_removal`, `preview_unused_worktrees`, `remove_worktrees` |
 | Keep/unprotect a worktree (unprotect needs native approval) | `set_worktree_protected` |
 | Search/filter candidates, inspect risk and deletion scope | `list_candidates` |
+| Explain why a local path is offered, skipped, or outside scope | `explain_path` |
 | Replace/add/remove selection, clear selection | `set_selection` |
 | Reveal selected candidate in Finder | `reveal_candidate` |
 | Clean low-risk items under the app's agent policy | `clean_low_risk` |
@@ -205,6 +206,7 @@ Read `tools/list` for complete strict schemas. Common examples:
 | `get_history` | Optional `offset`, `limit` |
 | `get_logs` | Optional `run_id`, `offset`, `limit` |
 | `reveal_candidate` | Current `candidate_id` |
+| `explain_path` | Local `path` (absolute or `~/...`); read-only async job |
 | `open_window` | `window`: `dashboard`, `review`, `settings`, `schedules`, `history`, `logs`, `agent`, `mcp`, `general`, `about`, `onboarding`; `tools` remains an alias for `mcp` |
 | `quit_app` | None besides the UUID; MCP is unavailable after quitting |
 

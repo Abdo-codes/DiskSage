@@ -21,8 +21,10 @@ scanner and deletion policy remain in control of filesystem access.
 
 - A menu-bar dashboard with disk capacity, cleanup estimates by category, and
   recent activity.
-- Searchable, resizable Review and History windows, with risk explanations and
-  deletion scope beside each candidate.
+- Searchable, resizable Review and History windows, with category/risk/sort filters,
+  visible size totals, risk explanations, deletion scope, and row context menus.
+- Read-only headless CLI (`DiskSage scan [--json]` and `DiskSage explain <path> [--json]`)
+  backed by the same scanner and safety policy.
 - Explicit confirmations for manual deletion, including selections hidden by
   filters. Cancel scanning or advice requests without losing the current list.
 - Progress for up to four independent cleanup targets, immediate removal of
@@ -76,20 +78,27 @@ empty, symlinked, disallowed, or running-executable targets are excluded.
 
 | Location | Files offered |
 | --- | --- |
-| Xcode DerivedData, project `.build`, compiler caches and Bazel output | Recognized compiled objects, modules and indexes |
+| Xcode DerivedData, project `.build`, compiler caches and Bazel output | Recognized compiled objects, modules and indexes; orphaned `DerivedData` whose workspace no longer exists (with unmounted `/Volumes` protected) is offered at low risk after 1 hour idle, and SwiftPM checkouts are verified clean against their bare mirrors before whole-folder removal |
 | Projects under `~/Developer`, `~/Documents/Codex`, Codex visualizations and temporary builds | The same generated-file rules, discovered recursively |
+| Git-verified project caches (`node_modules`, `.venv`, `target`, `_build`, `.next`, `vendor/bundle`, etc.) under `~/Developer`, `~/Documents/Codex`, `mise`-tracked projects, and configured extra roots | Git-ignored directories with zero tracked files, matching project markers, no nested Git repos or protected `refuse_inside` paths (such as Mix releases), and at least 24 hours of project quiet time (Git + Claude Code transcripts); customizable in **Settings → General & Safety → Project Cache Rules** or `~/.config/disksage/rules.json` |
+| Tool-native global caches (`brew`, `uv`, `mise`, `pnpm`, `pip`, `bun >= 1.4.4`, Yarn 1) | Cleaned by the tool's own verified executable from `$HOME` without a shell (Yarn 2+ zero-install caches stay protected) |
+| Ecosystem global caches (`~/.cargo/registry`, `~/.gradle/caches`, `~/.m2/repository`, `~/Library/Caches/CocoaPods`, `~/Library/Caches/ms-playwright`, `~/.cache/puppeteer`) | Directory contents only; Maven repos containing `maven-metadata-local.xml` are refused, sibling credentials/Git checkouts stay, and Playwright/Puppeteer browsers are **Review** items |
 | npm and Firebase CLI caches | Downloaded content payloads |
 | Go build cache | Recognizable compiled payloads; test output and action metadata stay |
 | Go module, SwiftPM binary and Bazel repository downloads | Recognized download files; Bazel archives require matching SHA-256 |
 | Known Electron apps | HTTP, code and GPU cache leaves only |
 | Xcode `<platform> DeviceSupport` folders | A version folder only when a newer version exists for the same device model and architecture |
-| Simulator devices, through `simctl` | One shut-down, unused device at a time, as a **Review** item; deleting it removes that device's installed apps and data |
+| Simulator devices & Xcode Previews, through `simctl` | One shut-down, unused device at a time (including `--set previews`), as a **Review** item |
+| Simulator runtimes, through `simctl runtime` | One deletable unusable or idle unused runtime image at a time, as a **Review** item |
 
-The default scan preserves source snapshots, checkouts, prebuilt tool bundles, installed dependencies,
-test evidence, conversation history, session disks and the newest device-support version per device. It never
-offers booted, in-use or kept simulators, app cache folders, archives, installed runtimes or tool versions.
+The default scan preserves source snapshots, checkouts, prebuilt tool bundles,
+test evidence, conversation history, session disks, the newest device-support version per device,
+and any path or simulator pattern listed in **Settings → General & Safety → Keep**. It never
+offers booted, in-use or kept simulators, active runtimes, archives, or installed tool versions.
 
-Files must be at least one hour old, including creation and metadata-change time.
+Scans run independent inventories concurrently with bounded parallelism and measure
+reclaimable space conservatively using APFS unshared private blocks (`ATTR_CMNEXT_PRIVATESIZE`)
+and exact hard-link deduplication (`ATTR_FILE_LINKCOUNT`). Files must be at least one hour old, including creation and metadata-change time.
 Open files and active build/cache folders are skipped. An unavailable activity
 check blocks cleanup. Before deleting, DiskSage verifies the selected file
 manifest again, then checks each file identity and periodically rechecks activity.
@@ -121,9 +130,21 @@ The default threshold is **15 GiB**. Automatic
 cleanup runs a fresh scan and rechecks enablement, threshold, and available space
 before deleting. Its preflight scan can be cancelled.
 
-In Review, use search and risk filters to narrow the list. **Select Visible Low
-Risk** preserves hidden selections; **Clear All** clears them too. The footer
-counts hidden selections, and confirmation lists every selected target.
+In Review, use search plus category, risk, and sort filters to narrow the list and see
+the visible byte total. Right-click any row to reveal it in Finder or copy its path.
+**Select Visible Low Risk** preserves hidden selections; **Clear All** clears them too.
+The footer counts hidden selections, and confirmation lists every selected target.
+
+### Command-line usage (read-only)
+
+Run read-only scans or inspect why a specific path is offered or skipped without opening the GUI:
+
+```sh
+/Applications/DiskSage.app/Contents/MacOS/DiskSage scan --risk low --json
+/Applications/DiskSage.app/Contents/MacOS/DiskSage explain ~/Developer/my-app/node_modules
+```
+
+CLI subcommands never delete files; deletions remain gated by the GUI and MCP approval flows.
 
 Once deletion starts, it finishes under the application-owned coordinator.
 Closing a window or disconnecting an agent does not stop it; quitting is blocked
@@ -246,7 +267,7 @@ app. It verifies client connectivity, independently of advisor sign-in or quota.
   low-risk targets without another prompt.
 
 This policy is separate from low-disk automation and metadata consent.
-See the [complete MCP tool contract](docs/MCP.md) for all 26 tools and examples.
+See the [complete MCP tool contract](docs/MCP.md) for all 34 tools and examples.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
