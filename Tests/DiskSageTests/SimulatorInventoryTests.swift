@@ -2,25 +2,37 @@ import Foundation
 import Testing
 @testable import DiskSage
 
-/// Records every simctl call and answers `list` with a fixed device list.
+/// Records every simctl call and answers `list` with fixed device lists for standard and previews sets.
 private final class FakeSimctl: @unchecked Sendable {
     private let lock = NSLock()
     private var states: [String: String]
+    private var previewStates: [String: String]
     private(set) var calls: [[String]] = []
 
-    init(_ states: [String: String]) { self.states = states }
+    init(_ states: [String: String], previews: [String: String] = [:]) {
+        self.states = states
+        self.previewStates = previews
+    }
 
     func set(_ udid: String, _ state: String) { lock.withLock { states[udid] = state } }
+    func setPreview(_ udid: String, _ state: String) { lock.withLock { previewStates[udid] = state } }
 
     var run: SimulatorInventory.Run {
         { [self] arguments in
             lock.withLock {
                 calls.append(arguments)
-                if arguments.first == "delete" { states[arguments[1]] = nil; return (0, Data()) }
-                let entries = states.sorted { $0.key < $1.key }.map { udid, state in
+                let isPreviews = arguments.starts(with: ["--set", "previews"])
+                let command = isPreviews ? Array(arguments.dropFirst(2)) : arguments
+                if command.first == "delete" {
+                    if isPreviews { previewStates[command[1]] = nil } else { states[command[1]] = nil }
+                    return (0, Data())
+                }
+                let map = isPreviews ? previewStates : states
+                let entries = map.sorted { $0.key < $1.key }.map { udid, state in
                     #"{"udid":"\#(udid)","name":"Device \#(udid.prefix(4))","state":"\#(state)","isAvailable":true}"#
                 }
-                let json = #"warning: ignore this line\#n{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[\#(entries.joined(separator: ","))]}}"#
+                let prefix = isPreviews ? "Using Previews Device Set: '/tmp/previews'\n" : "warning: ignore this line\n"
+                let json = #"\#(prefix){"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[\#(entries.joined(separator: ","))]}}"#
                 return (0, Data(json.utf8))
             }
         }
@@ -68,14 +80,40 @@ struct SimulatorInventoryTests {
             .first { $0.url.lastPathComponent == idle })
         // The device boots after the scan: nothing is deleted.
         simctl.set(idle, "Booted")
-        #expect(throws: (any Error).self) { try SimulatorInventory.delete(candidate, activity: .idle, run: simctl.run) }
+        #expect(throws: (any Error).self) { try SimulatorInventory.delete(candidate, activity: .idle, home: f.base, run: simctl.run) }
         // A process starts to use it after the scan: nothing is deleted.
         simctl.set(idle, "Shutdown")
         let using = CleanupActivity(paths: [candidate.url.path + "/data/x"])
-        #expect(throws: (any Error).self) { try SimulatorInventory.delete(candidate, activity: using, run: simctl.run) }
+        #expect(throws: (any Error).self) { try SimulatorInventory.delete(candidate, activity: using, home: f.base, run: simctl.run) }
         #expect(!simctl.calls.contains { $0.first == "delete" })
-        try SimulatorInventory.delete(candidate, activity: .idle, run: simctl.run)
+        try SimulatorInventory.delete(candidate, activity: .idle, home: f.base, run: simctl.run)
         #expect(simctl.calls.filter { $0.first == "delete" } == [["delete", idle]])
+    }
+
+    @Test func offersAndDeletesShutDownXcodePreviewSimulatorsUsingPreviewsSet() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let previewIdle = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        let previewBooted = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+        try f.write("Library/Developer/Xcode/UserData/Previews/Simulator Devices/\(previewIdle)/data/preview.bin")
+        try f.write("Library/Developer/Xcode/UserData/Previews/Simulator Devices/\(previewBooted)/data/preview.bin")
+        let simctl = FakeSimctl([:], previews: [previewIdle: "Shutdown", previewBooted: "Booted"])
+
+        let found = SimulatorInventory.candidates(activity: .idle, home: f.base, run: simctl.run)
+        let candidate = try #require(found.first)
+        #expect(found.count == 1)
+        #expect(candidate.url == CleanupPath.fileURL(SimulatorInventory.previewsRoot(home: f.base).appending(path: previewIdle)))
+        #expect(candidate.name.hasPrefix("Preview · "))
+        #expect(candidate.risk == .medium && candidate.deletionMode == .simulatorDevice && candidate.category == .simulator)
+        try SafetyPolicy(home: f.base).validate(candidate)
+
+        // Booting after scan blocks deletion.
+        simctl.setPreview(previewIdle, "Booted")
+        #expect(throws: (any Error).self) { try SimulatorInventory.delete(candidate, activity: .idle, home: f.base, run: simctl.run) }
+
+        // Shut down again -> deletes via `--set previews delete <udid>`.
+        simctl.setPreview(previewIdle, "Shutdown")
+        try SimulatorInventory.delete(candidate, activity: .idle, home: f.base, run: simctl.run)
+        #expect(simctl.calls.contains(["--set", "previews", "delete", previewIdle]))
     }
 
     @Test func policyAllowsOnlyOneDeviceFolder() throws {
