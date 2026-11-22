@@ -285,4 +285,35 @@ struct MiseAndCustomRulesTests {
         #expect(stillIntact.quietHours == 48)
         #expect(stillIntact.skip?.count == 100_000)
     }
+
+    @Test func invalidExtraRootOnDiskExcludesThatRootWithoutDiscardingProtectiveRules() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let projects = try f.folder("Projects")
+        let work = try f.folder("Work")
+        let devApp = f.base.appending(path: "Developer/archive/app")
+        try initGitProject(at: devApp, gitignore: "node_modules/\n")
+        try f.write("Developer/archive/app/node_modules/pkg/index.js", bytes: 8_192)
+
+        let config = ProjectCacheRulesLoader.UserConfig(
+            skip: ["archive"],
+            quietHours: 168,
+            extraRoots: ["~/Projects", "~/Work"]
+        )
+        try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+
+        // Later, ~/Projects is replaced with a symlink on disk.
+        let external = try f.folder("external")
+        try FileManager.default.removeItem(at: projects)
+        try FileManager.default.createSymbolicLink(at: projects, withDestinationURL: external)
+
+        // Protective rules remain enforced by current() and scanning; only the invalid extra root is excluded.
+        let env = ["XDG_CONFIG_HOME": f.base.appending(path: ".config").path]
+        let loaded = ProjectCacheRulesLoader.current(home: f.base, env: env)
+        #expect(loaded.quietHours == 168)
+        #expect(loaded.skip.contains("archive"))
+        #expect(ProjectCacheRulesLoader.extraRoots(home: f.base, env: env) == [CleanupPath.fileURL(work)])
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: f.later(hours: 200),
+                                                 home: f.base, minimumBytes: 1).isEmpty)
+    }
 }

@@ -83,16 +83,18 @@ enum ProjectCacheRulesLoader {
     static func current(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                         env: [String: String]? = nil) -> ProjectCacheRules {
         let url = configURL(home: home, env: env)
-        return (try? load(from: url, home: home)) ?? .default
+        return (try? load(from: url)) ?? .default
     }
 
-    /// Returns validated, existing extra project roots from `rules.json`, or `[]` if missing/invalid.
+    /// Returns validated, existing extra project roots from `rules.json`, ignoring any individual invalid entry.
     static func extraRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                            env: [String: String]? = nil) -> [URL] {
         let url = configURL(home: home, env: env)
-        guard let config = try? loadConfig(from: url),
-              let roots = try? validatedExtraRoots(config.extraRoots ?? [], home: home) else { return [] }
-        return roots.filter { TemporaryBuildOutput.isRealDirectory($0) }
+        guard let config = try? loadConfig(from: url) else { return [] }
+        let valid = (config.extraRoots ?? [])
+            .compactMap { validatedExtraRoot($0, home: home) }
+            .filter { TemporaryBuildOutput.isRealDirectory($0) }
+        return MiseProjectDiscovery.uniqueSorted(valid)
     }
 
     /// Reads the raw user configuration document, returning an empty `UserConfig` when absent.
@@ -112,12 +114,8 @@ enum ProjectCacheRulesLoader {
     }
 
     /// Loads and validates a user rules JSON file, returning `.default` if the file does not exist.
-    static func load(from url: URL,
-                     home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> ProjectCacheRules {
+    static func load(from url: URL) throws -> ProjectCacheRules {
         let doc = try loadConfig(from: url)
-        if let extra = doc.extraRoots {
-            _ = try validatedExtraRoots(extra, home: home)
-        }
         return try merge(base: .default, document: doc)
     }
 
