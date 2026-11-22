@@ -108,6 +108,14 @@ struct PathDiagnosticsTests {
         let derivedDiag = PathDiagnostics.explain(derived.path, activity: .idle, now: f.later(hours: 2), home: f.base)
         #expect(derivedDiag.verdict == .eligible)
         #expect(derivedDiag.matcher == "Generated files")
+
+        // Custom-named `build` directory with Xcode output markers (and no Gradle/Python project markers beside it)
+        // must fall through from project-cache missing-marker refusal to GeneratedCleanupScope eligibility.
+        try f.write("Developer/xcode-custom/build/Build/Intermediates.noindex/App.o", bytes: 8_192)
+        let customBuild = CleanupPath.fileURL(f.base.appending(path: "Developer/xcode-custom/build"))
+        let customBuildDiag = PathDiagnostics.explain(customBuild.path, activity: .idle, now: f.later(hours: 2), home: f.base)
+        #expect(customBuildDiag.verdict == .eligible)
+        #expect(customBuildDiag.matcher == "Generated files")
     }
 
     @Test func liveClaudeSessionBlocksScratchpadEvenWhenScratchpadItselfIsOld() throws {

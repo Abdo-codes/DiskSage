@@ -106,6 +106,14 @@ enum PathDiagnostics {
         if let project = explainProjectCache(url, activity: activity, now: now, home: canonicalHome,
                                              rules: activeRules, claudeDir: claudeProjectsDirectory,
                                              miseEnv: miseEnv, git: git, minimumBytes: minimumProjectBytes) {
+            if project.verdict == .eligible { return project }
+            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
+                let generated = explainGenerated(url, rule: genRule, activity: activity, now: now,
+                                                 home: canonicalHome, keep: keep)
+                if generated.verdict == .eligible { return generated }
+                return skipped(url, matcher: project.matcher, sizeBytes: project.sizeBytes ?? generated.sizeBytes,
+                               reasons: project.reasons + generated.reasons)
+            }
             return project
         }
         if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
