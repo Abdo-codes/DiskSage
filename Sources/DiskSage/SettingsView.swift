@@ -47,6 +47,7 @@ struct SettingsView: View {
                     LabeledContent("Last automatic cleanup", value: model.automaticCleanupSummary)
                 }
                 KeepRulesSettingsView()
+                ProjectCacheRulesSettingsView()
             }
             .formStyle(.grouped)
             .padding(16)

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import DiskSage
@@ -173,5 +174,218 @@ struct MiseAndCustomRulesTests {
         let frontendCache = try #require(found.first)
         #expect(found.map(\.url) == [CleanupPath.fileURL(monorepo.appending(path: "frontend/node_modules"))])
         try ProjectCacheInventory.verifyBeforeDeletion(frontendCache, activity: .idle, now: quietNow, home: f.base)
+    }
+
+    @Test func savesAndLoadsExtraProjectRootsPreservingHandEditedFieldsAndRejectingUnsafeRoots() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let projects = f.base.appending(path: "Projects/web-app")
+        try initGitProject(at: projects, gitignore: "node_modules/\n")
+        try f.write("Projects/web-app/node_modules/pkg/index.js", bytes: 8_192)
+
+        // Start with hand-edited beside & refuse_inside rules; saving updated quiet_hours + extra_roots preserves them.
+        var config = ProjectCacheRulesLoader.UserConfig(
+            names: [".custom-out"],
+            beside: [".custom-out": ["Makefile"]],
+            refuseInside: [".custom-out": ["keep/*"]],
+            skip: ["archive"],
+            quietHours: 36,
+            extraRoots: ["~/Projects"]
+        )
+        try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+
+        let reread = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reread == config)
+        let extra = ProjectCacheRulesLoader.extraRoots(home: f.base, env: ["XDG_CONFIG_HOME": f.base.appending(path: ".config").path])
+        #expect(extra == [CleanupPath.fileURL(f.base.appending(path: "Projects"))])
+
+        // End-to-end scan using ~/Projects via extra_roots in rules.json.
+        let quietNow = f.later(hours: 40)
+        let found = ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1)
+        let candidate = try #require(found.first)
+        #expect(candidate.url == CleanupPath.fileURL(projects.appending(path: "node_modules")))
+        try SafetyPolicy(home: f.base, now: quietNow).validate(candidate)
+        try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: .idle, now: quietNow, home: f.base)
+
+        // Unsafe extra_roots are rejected on save and reported by invalidExtraRoots.
+        let unsafe = ["/", "~", "~/Library", "~/Library/Caches", "/etc", "~/Projects/.git", "relative/dir"]
+        #expect(ProjectCacheRulesLoader.invalidExtraRoots(unsafe, home: f.base) == unsafe)
+        for bad in unsafe {
+            config.extraRoots = [bad]
+            #expect(throws: (any Error).self) {
+                try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+            }
+        }
+
+        // Symlinked extra root is rejected.
+        let external = try f.folder("external")
+        let link = f.base.appending(path: "LinkedProjects")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
+        config.extraRoots = ["~/LinkedProjects"]
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+        }
+
+        // Symlinked rules.json is refused on save.
+        let realTarget = try f.write("elsewhere.json", bytes: 2)
+        let linkRules = f.base.appending(path: "link-rules.json")
+        try FileManager.default.createSymbolicLink(at: linkRules, withDestinationURL: realTarget)
+        config.extraRoots = ["~/Projects"]
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(config, to: linkRules, home: f.base)
+        }
+    }
+
+    @Test func editableQuietHoursRejectsOutOfRangeAndOverflowingValuesWithoutTrapping() throws {
+        #expect(try ProjectCacheRulesLoader.editableQuietHours(from: .init()) == 24)
+        #expect(try ProjectCacheRulesLoader.editableQuietHours(from: .init(quietHours: 48)) == 48)
+        for bad in [0.0, 0.5, 1.5, 169.0, 1e100, Double.infinity, Double.nan] {
+            #expect(throws: (any Error).self) {
+                _ = try ProjectCacheRulesLoader.editableQuietHours(from: .init(quietHours: bad))
+            }
+        }
+    }
+
+    @Test func editableLinesRoundTripsCommasLosslesslyAndRejectsUnsafeEntries() throws {
+        let entries = ["archive,old", "vendor,cache"]
+        let text = try ProjectCacheRulesLoader.editableLines(from: entries, field: "skip")
+        #expect(ProjectCacheRulesLoader.parseLines(text) == entries)
+
+        for nonRoundTrippable in [["line\nbreak"], [" leading"], ["trailing "], [""]] {
+            #expect(throws: (any Error).self) {
+                _ = try ProjectCacheRulesLoader.editableLines(from: nonRoundTrippable, field: "skip")
+            }
+        }
+    }
+
+    @Test func saveEnforcesMaximumFileSizeAndPreservesExistingRulesWhenOversized() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+
+        // Compact-eligible near-limit config (pretty-printed > 1 MiB, compact <= 1 MiB) saves compactly and reloads.
+        let nearLimit = ProjectCacheRulesLoader.UserConfig(
+            skip: Array(repeating: "archive", count: 100_000),
+            quietHours: 48
+        )
+        try ProjectCacheRulesLoader.save(nearLimit, to: rulesFile, home: f.base)
+        let savedSize = try FileManager.default.attributesOfItem(atPath: rulesFile.path)[.size] as? NSNumber
+        #expect((savedSize?.int64Value ?? .max) <= Int64(ProjectCacheRulesLoader.maximumFileBytes))
+        let reloaded = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reloaded.quietHours == 48)
+        #expect(reloaded.skip?.count == 100_000)
+
+        // Truly oversized config (> 1 MiB even when compact) throws and leaves the existing rules file intact.
+        let oversized = ProjectCacheRulesLoader.UserConfig(
+            skip: Array(repeating: "archive", count: 120_000),
+            quietHours: 72
+        )
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(oversized, to: rulesFile, home: f.base)
+        }
+        let stillIntact = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(stillIntact.quietHours == 48)
+        #expect(stillIntact.skip?.count == 100_000)
+    }
+
+    @Test func invalidExtraRootOnDiskExcludesThatRootWithoutDiscardingProtectiveRules() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let projects = try f.folder("Projects")
+        let work = try f.folder("Work")
+        let devApp = f.base.appending(path: "Developer/archive/app")
+        try initGitProject(at: devApp, gitignore: "node_modules/\n")
+        try f.write("Developer/archive/app/node_modules/pkg/index.js", bytes: 8_192)
+
+        let config = ProjectCacheRulesLoader.UserConfig(
+            skip: ["archive"],
+            quietHours: 168,
+            extraRoots: ["~/Projects", "~/Work"]
+        )
+        try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+
+        // Later, ~/Projects is replaced with a symlink on disk.
+        let external = try f.folder("external")
+        try FileManager.default.removeItem(at: projects)
+        try FileManager.default.createSymbolicLink(at: projects, withDestinationURL: external)
+
+        // Protective rules remain enforced by current() and scanning; only the invalid extra root is excluded.
+        let env = ["XDG_CONFIG_HOME": f.base.appending(path: ".config").path]
+        let loaded = ProjectCacheRulesLoader.current(home: f.base, env: env)
+        #expect(loaded.quietHours == 168)
+        #expect(loaded.skip.contains("archive"))
+        #expect(ProjectCacheRulesLoader.extraRoots(home: f.base, env: env) == [CleanupPath.fileURL(work)])
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: f.later(hours: 200),
+                                                 home: f.base, minimumBytes: 1).isEmpty)
+    }
+
+    @Test func symlinkedConfigDirectoryStillLoadsProtectionsWhileRefusingSymlinkWrites() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let dotfiles = try f.folder("dotfiles/disksage")
+        try Data(#"{"quiet_hours": 168, "skip": ["archive"]}"#.utf8)
+            .write(to: dotfiles.appending(path: "rules.json"))
+
+        let configDir = try f.folder(".config")
+        try FileManager.default.createSymbolicLink(
+            at: configDir.appending(path: "disksage"),
+            withDestinationURL: dotfiles
+        )
+
+        // Reading preserves protective rules even when ~/.config/disksage is a dotfiles symlink.
+        let env = ["XDG_CONFIG_HOME": configDir.path]
+        let loaded = ProjectCacheRulesLoader.current(home: f.base, env: env)
+        #expect(loaded.quietHours == 168)
+        #expect(loaded.skip.contains("archive"))
+
+        // Writing still refuses traversing symlinked config ancestors.
+        let rulesURL = ProjectCacheRulesLoader.configURL(home: f.base, env: env)
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(.init(quietHours: 48), to: rulesURL, home: f.base)
+        }
+        // Existing rules remain intact.
+        #expect(ProjectCacheRulesLoader.current(home: f.base, env: env).quietHours == 168)
+    }
+
+    @Test func saveRejectsStaleSnapshotWhenRulesChangedExternally() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let initial = try ProjectCacheRulesLoader.save(.init(quietHours: 36), to: rulesFile, home: f.base)
+        let snapshot = try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesFile)
+        #expect(snapshot.rawData == initial)
+
+        // Simulate an external edit adding a protective refuse_inside rule after Settings loaded.
+        try Data(#"{"quiet_hours": 36, "refuse_inside": {"_build": ["custom/*"]}}"#.utf8).write(to: rulesFile)
+
+        // Saving with the stale snapshot fails and preserves the external edit.
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(
+                .init(quietHours: 48),
+                to: rulesFile,
+                home: f.base,
+                expectedExistingData: .some(snapshot.rawData)
+            )
+        }
+        let reloaded = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reloaded.refuseInside?["_build"] == ["custom/*"])
+        #expect(reloaded.quietHours == 36)
+
+        // After reloading a fresh snapshot, saving succeeds.
+        let fresh = try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesFile)
+        var updated = fresh.config
+        updated.quietHours = 48
+        try ProjectCacheRulesLoader.save(updated, to: rulesFile, home: f.base,
+                                         expectedExistingData: .some(fresh.rawData))
+        let finalConfig = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(finalConfig.quietHours == 48)
+        #expect(finalConfig.refuseInside?["_build"] == ["custom/*"])
+    }
+
+    @Test func loadConfigRejectsFifoWithoutBlocking() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let fifo = f.base.appending(path: ".config/disksage/rules.json")
+        try FileManager.default.createDirectory(at: fifo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        #expect(throws: (any Error).self) {
+            _ = try ProjectCacheRulesLoader.loadConfig(from: fifo)
+        }
     }
 }
