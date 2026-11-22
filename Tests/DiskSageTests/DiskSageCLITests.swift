@@ -109,4 +109,31 @@ struct DiskSageCLITests {
         #expect(failed.stdout.isEmpty)
         #expect(failed.stderr.contains("Activity check unavailable"))
     }
+
+    @Test func parsesAndRunsExplainCommandInTextAndJSONModes() async throws {
+        #expect(DiskSageCLI.parse(["explain", "/tmp/x"]) == .explain(.init(path: "/tmp/x", json: false)))
+        #expect(DiskSageCLI.parse(["explain", "--json", "~/Developer/app/node_modules"]) == .explain(.init(path: "~/Developer/app/node_modules", json: true)))
+        if case .usageError = DiskSageCLI.parse(["explain"]) {} else { Issue.record("Expected usageError for missing explain path") }
+
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+        let sample = PathDiagnostic(
+            path: "/Users/tester/Developer/app/node_modules",
+            verdict: .skipped,
+            matcher: "Project cache (Node dependencies)",
+            risk: nil,
+            sizeBytes: 12_000_000,
+            summary: "Project cache node_modules contains tracked Git files.",
+            reasons: ["Project cache node_modules contains tracked Git files."]
+        )
+        let text = await DiskSageCLI.run(.explain(.init(path: sample.path, json: false)), explain: { _ in sample }, home: home)
+        #expect(text.exitCode == 0)
+        #expect(text.stdout.contains("~/Developer/app/node_modules"))
+        #expect(text.stdout.contains("Skipped"))
+        #expect(text.stdout.contains("tracked Git files"))
+
+        let json = await DiskSageCLI.run(.explain(.init(path: sample.path, json: true)), explain: { _ in sample }, home: home)
+        #expect(json.exitCode == 0)
+        let decoded = try JSONDecoder().decode(PathDiagnostic.self, from: Data(json.stdout.utf8))
+        #expect(decoded == sample)
+    }
 }

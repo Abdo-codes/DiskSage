@@ -240,11 +240,16 @@ enum ProjectCacheInventory {
         return best
     }
 
-    private static func verifyGitIgnoredAndUntracked(cacheURL: URL, repoRoot: URL, git: WorktreeGitProcess) throws {
+    static func verifyGitIgnoredAndUntracked(cacheURL: URL, repoRoot: URL, git: WorktreeGitProcess) throws {
         guard cacheURL.path.hasPrefix(repoRoot.path + "/") else {
             throw SafetyPolicyError.refused("Project cache is outside its repository root.")
         }
         let rel = String(cacheURL.path.dropFirst(repoRoot.path.count + 1))
+        let tracked = try git.run(repoRoot.path, ["ls-files", "-z", "--", rel],
+                                  environment: ["GIT_LITERAL_PATHSPECS": "1"])
+        guard tracked.data.isEmpty else {
+            throw SafetyPolicyError.refused("Project cache \(rel) contains tracked Git files.")
+        }
         // `git check-ignore` requires `--stdin` with `-z` and rejects GIT_LITERAL_PATHSPECS=1.
         let ignored = try git.run(repoRoot.path, ["check-ignore", "--stdin", "-z"], allowed: [0, 1],
                                   input: Data((rel + "\0").utf8))
@@ -252,15 +257,10 @@ enum ProjectCacheInventory {
         guard ignored.code == 0, ignoredPaths.contains(rel) else {
             throw SafetyPolicyError.refused("Project cache \(rel) is not ignored by Git.")
         }
-        let tracked = try git.run(repoRoot.path, ["ls-files", "-z", "--", rel],
-                                  environment: ["GIT_LITERAL_PATHSPECS": "1"])
-        guard tracked.data.isEmpty else {
-            throw SafetyPolicyError.refused("Project cache \(rel) contains tracked Git files.")
-        }
     }
 
-    private static func projectLastActivity(root: URL, claudeDir: URL, claudeFolders: [String],
-                                            git: WorktreeGitProcess) -> Date? {
+    static func projectLastActivity(root: URL, claudeDir: URL, claudeFolders: [String],
+                                    git: WorktreeGitProcess) -> Date? {
         guard let output = try? git.text(root.path, ["rev-parse", "--show-toplevel", "--git-path", "logs/HEAD", "--git-path", "HEAD"]) else {
             return nil
         }
@@ -315,14 +315,14 @@ enum ProjectCacheInventory {
         now.timeIntervalSince(lastActivity) >= quietHours * 3_600
     }
 
-    private static func defaultClaudeProjectsDirectory(home: URL) -> URL {
+    static func defaultClaudeProjectsDirectory(home: URL) -> URL {
         if let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
             return CleanupPath.fileURL(URL(fileURLWithPath: custom, isDirectory: true)).appending(path: "projects", directoryHint: .isDirectory)
         }
         return CleanupPath.fileURL(home).appending(path: ".claude/projects", directoryHint: .isDirectory)
     }
 
-    private static func listSubdirectories(_ dir: URL) -> [String] {
+    static func listSubdirectories(_ dir: URL) -> [String] {
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
         return entries.filter { name in
             var info = stat()
@@ -335,7 +335,7 @@ enum ProjectCacheInventory {
         return lstat(dir.appending(path: ".git").path, &info) == 0
     }
 
-    private static func gitWorkTreeTopLevel(for dir: URL, git: WorktreeGitProcess) -> URL? {
+    static func gitWorkTreeTopLevel(for dir: URL, git: WorktreeGitProcess) -> URL? {
         guard let top = try? git.text(dir.path, ["rev-parse", "--show-toplevel"]), !top.isEmpty else { return nil }
         return CleanupPath.fileURL(URL(fileURLWithPath: top, isDirectory: true))
     }
