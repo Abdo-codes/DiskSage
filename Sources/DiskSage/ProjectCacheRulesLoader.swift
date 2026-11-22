@@ -28,6 +28,11 @@ enum ProjectCacheRulesLoader {
         }
     }
 
+    struct ConfigSnapshot: Equatable, Sendable {
+        let config: UserConfig
+        let rawData: Data?
+    }
+
     static let maximumFileBytes: off_t = 1_048_576
     static let minimumQuietHours: Double = 1
     static let editableQuietHoursRange: ClosedRange<Int> = 1...168
@@ -99,18 +104,17 @@ enum ProjectCacheRulesLoader {
 
     /// Reads the raw user configuration document, returning an empty `UserConfig` when absent.
     static func loadConfig(from url: URL) throws -> UserConfig {
-        try rejectSymlinkedAncestors(of: url)
-        var info = stat()
-        if lstat(url.path, &info) != 0 {
-            if errno == ENOENT { return UserConfig() }
-            throw FeatureFailure(message: "Could not read custom rules at \(url.path).")
+        try loadConfigSnapshot(from: url).config
+    }
+
+    /// Reads the user configuration alongside its exact on-disk bytes for optimistic conflict detection.
+    /// Allows dotfiles-symlinked config parent directories while refusing a symlinked `rules.json` file.
+    static func loadConfigSnapshot(from url: URL) throws -> ConfigSnapshot {
+        guard let data = try readRawData(from: url) else {
+            return ConfigSnapshot(config: UserConfig(), rawData: nil)
         }
-        guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid(),
-              info.st_size >= 0, info.st_size <= maximumFileBytes else {
-            throw FeatureFailure(message: "Custom rules file must be a regular user-owned file under 1 MiB.")
-        }
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(UserConfig.self, from: data)
+        let decoded = try JSONDecoder().decode(UserConfig.self, from: data)
+        return ConfigSnapshot(config: decoded, rawData: data)
     }
 
     /// Loads and validates a user rules JSON file, returning `.default` if the file does not exist.
@@ -120,8 +124,11 @@ enum ProjectCacheRulesLoader {
     }
 
     /// Validates and atomically writes `config` to `url` with `0o600` permissions, refusing symlinks.
+    /// When `expectedExistingData` is provided, refuses to overwrite if `rules.json` changed on disk.
+    @discardableResult
     static func save(_ config: UserConfig, to url: URL = configURL(),
-                     home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                     expectedExistingData: Data?? = nil) throws -> Data {
         _ = try merge(base: .default, document: config)
         _ = try validatedExtraRoots(config.extraRoots ?? [], home: home)
         let data = try encode(config)
@@ -134,6 +141,13 @@ enum ProjectCacheRulesLoader {
             }
         } else if errno != ENOENT {
             throw FeatureFailure(message: "Could not inspect custom rules path.")
+        }
+
+        if let expected = expectedExistingData {
+            let current = try readRawData(from: url)
+            guard current == expected else {
+                throw FeatureFailure(message: "rules.json changed on disk since Settings loaded. Reload before saving.")
+            }
         }
 
         let parent = url.deletingLastPathComponent()
@@ -151,6 +165,45 @@ enum ProjectCacheRulesLoader {
             try? FileManager.default.removeItem(at: temp)
             throw FeatureFailure(message: "Could not save custom rules: \(String(cString: strerror(code))).")
         }
+        return data
+    }
+
+    private static func readRawData(from url: URL) throws -> Data? {
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW)
+        if fd < 0 {
+            if errno == ENOENT { return nil }
+            if errno == ELOOP {
+                throw FeatureFailure(message: "Custom rules file must be a regular user-owned file under 1 MiB.")
+            }
+            throw FeatureFailure(message: "Could not read custom rules at \(url.path).")
+        }
+        defer { close(fd) }
+
+        var info = stat()
+        guard fstat(fd, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == getuid(),
+              info.st_size >= 0,
+              info.st_size <= maximumFileBytes else {
+            throw FeatureFailure(message: "Custom rules file must be a regular user-owned file under 1 MiB.")
+        }
+
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 16_384)
+        let limit = Int(maximumFileBytes)
+        while true {
+            let count = Darwin.read(fd, &chunk, chunk.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw FeatureFailure(message: "Could not read custom rules at \(url.path).")
+            }
+            if count == 0 { break }
+            if data.count + count > limit {
+                throw FeatureFailure(message: "Custom rules file must be a regular user-owned file under 1 MiB.")
+            }
+            data.append(chunk, count: count)
+        }
+        return data
     }
 
     private static func encode(_ config: UserConfig) throws -> Data {

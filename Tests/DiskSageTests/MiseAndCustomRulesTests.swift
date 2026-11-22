@@ -316,4 +316,65 @@ struct MiseAndCustomRulesTests {
         #expect(ProjectCacheInventory.candidates(activity: .idle, now: f.later(hours: 200),
                                                  home: f.base, minimumBytes: 1).isEmpty)
     }
+
+    @Test func symlinkedConfigDirectoryStillLoadsProtectionsWhileRefusingSymlinkWrites() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let dotfiles = try f.folder("dotfiles/disksage")
+        try Data(#"{"quiet_hours": 168, "skip": ["archive"]}"#.utf8)
+            .write(to: dotfiles.appending(path: "rules.json"))
+
+        let configDir = try f.folder(".config")
+        try FileManager.default.createSymbolicLink(
+            at: configDir.appending(path: "disksage"),
+            withDestinationURL: dotfiles
+        )
+
+        // Reading preserves protective rules even when ~/.config/disksage is a dotfiles symlink.
+        let env = ["XDG_CONFIG_HOME": configDir.path]
+        let loaded = ProjectCacheRulesLoader.current(home: f.base, env: env)
+        #expect(loaded.quietHours == 168)
+        #expect(loaded.skip.contains("archive"))
+
+        // Writing still refuses traversing symlinked config ancestors.
+        let rulesURL = ProjectCacheRulesLoader.configURL(home: f.base, env: env)
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(.init(quietHours: 48), to: rulesURL, home: f.base)
+        }
+        // Existing rules remain intact.
+        #expect(ProjectCacheRulesLoader.current(home: f.base, env: env).quietHours == 168)
+    }
+
+    @Test func saveRejectsStaleSnapshotWhenRulesChangedExternally() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let initial = try ProjectCacheRulesLoader.save(.init(quietHours: 36), to: rulesFile, home: f.base)
+        let snapshot = try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesFile)
+        #expect(snapshot.rawData == initial)
+
+        // Simulate an external edit adding a protective refuse_inside rule after Settings loaded.
+        try Data(#"{"quiet_hours": 36, "refuse_inside": {"_build": ["custom/*"]}}"#.utf8).write(to: rulesFile)
+
+        // Saving with the stale snapshot fails and preserves the external edit.
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(
+                .init(quietHours: 48),
+                to: rulesFile,
+                home: f.base,
+                expectedExistingData: .some(snapshot.rawData)
+            )
+        }
+        let reloaded = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reloaded.refuseInside?["_build"] == ["custom/*"])
+        #expect(reloaded.quietHours == 36)
+
+        // After reloading a fresh snapshot, saving succeeds.
+        let fresh = try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesFile)
+        var updated = fresh.config
+        updated.quietHours = 48
+        try ProjectCacheRulesLoader.save(updated, to: rulesFile, home: f.base,
+                                         expectedExistingData: .some(fresh.rawData))
+        let finalConfig = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(finalConfig.quietHours == 48)
+        #expect(finalConfig.refuseInside?["_build"] == ["custom/*"])
+    }
 }

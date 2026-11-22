@@ -8,9 +8,11 @@ struct ProjectCacheRulesSettingsView: View {
     @State private var extraRootsText = ""
     @State private var extraNamesText = ""
     @State private var extraSkipText = ""
+    @State private var loadedQuietHours: Int = Int(ProjectCacheRules.default.quietHours)
     @State private var loadedRootsText = ""
     @State private var loadedNamesText = ""
     @State private var loadedSkipText = ""
+    @State private var loadedRawData: Data?
     @State private var preservedConfig = ProjectCacheRulesLoader.UserConfig()
     @State private var loadError: String?
     @State private var statusMessage: String?
@@ -27,6 +29,13 @@ struct ProjectCacheRulesSettingsView: View {
 
     private var hasValidationError: Bool {
         !invalidRoots.isEmpty || !invalidNames.isEmpty || !invalidSkips.isEmpty
+    }
+
+    private var isDirty: Bool {
+        quietHours != loadedQuietHours
+            || extraRootsText != loadedRootsText
+            || extraNamesText != loadedNamesText
+            || extraSkipText != loadedSkipText
     }
 
     var body: some View {
@@ -78,6 +87,7 @@ struct ProjectCacheRulesSettingsView: View {
             HStack(spacing: 10) {
                 Button("Save Rules", action: save)
                     .disabled(hasValidationError || loadError != nil)
+                Button("Reload", action: reloadFromButton)
                 Button("Reveal rules.json", action: revealConfig)
                 Button("Reset", action: resetDefaults)
                     .disabled(loadError != nil)
@@ -94,22 +104,34 @@ struct ProjectCacheRulesSettingsView: View {
             Text("Saved to \(ProjectCacheRulesLoader.configURL().path). Built-in roots (~/Developer, ~/Documents/Codex, and mise-tracked projects) plus Git-ignore, zero-tracked-file, nested-Git, and Keep checks always remain enforced.")
         }
         .onAppear {
-            guard !isLoaded else { return }
-            isLoaded = true
-            reload()
+            if !isLoaded || !isDirty {
+                isLoaded = true
+                reload()
+            }
+        }
+    }
+
+    private func reloadFromButton() {
+        reload()
+        if loadError == nil {
+            statusMessage = "Reloaded."
+            isErrorStatus = false
         }
     }
 
     private func reload() {
         let url = ProjectCacheRulesLoader.configURL()
         do {
-            let config = try ProjectCacheRulesLoader.loadConfig(from: url)
+            let snapshot = try ProjectCacheRulesLoader.loadConfigSnapshot(from: url)
+            let config = snapshot.config
             let editableHours = try ProjectCacheRulesLoader.editableQuietHours(from: config)
             let rootsText = try ProjectCacheRulesLoader.editableLines(from: config.extraRoots, field: "extra_roots")
             let namesText = try ProjectCacheRulesLoader.editableLines(from: config.names, field: "names")
             let skipText = try ProjectCacheRulesLoader.editableLines(from: config.skip, field: "skip")
             preservedConfig = config
+            loadedRawData = snapshot.rawData
             quietHours = editableHours
+            loadedQuietHours = editableHours
             extraRootsText = rootsText
             extraNamesText = namesText
             extraSkipText = skipText
@@ -135,8 +157,10 @@ struct ProjectCacheRulesSettingsView: View {
             updated.skip = extraSkipList.isEmpty ? nil : extraSkipList
         }
         do {
-            try ProjectCacheRulesLoader.save(updated)
+            let written = try ProjectCacheRulesLoader.save(updated, expectedExistingData: .some(loadedRawData))
             preservedConfig = updated
+            loadedRawData = written
+            loadedQuietHours = quietHours
             loadedRootsText = extraRootsText
             loadedNamesText = extraNamesText
             loadedSkipText = extraSkipText
@@ -149,11 +173,29 @@ struct ProjectCacheRulesSettingsView: View {
     }
 
     private func resetDefaults() {
-        quietHours = Int(ProjectCacheRules.default.quietHours)
-        extraRootsText = ""
-        extraNamesText = ""
-        extraSkipText = ""
-        save()
+        var updated = preservedConfig
+        updated.quietHours = nil
+        updated.extraRoots = nil
+        updated.names = nil
+        updated.skip = nil
+        do {
+            let written = try ProjectCacheRulesLoader.save(updated, expectedExistingData: .some(loadedRawData))
+            preservedConfig = updated
+            loadedRawData = written
+            quietHours = Int(ProjectCacheRules.default.quietHours)
+            loadedQuietHours = quietHours
+            extraRootsText = ""
+            extraNamesText = ""
+            extraSkipText = ""
+            loadedRootsText = ""
+            loadedNamesText = ""
+            loadedSkipText = ""
+            statusMessage = "Reset to defaults."
+            isErrorStatus = false
+        } catch {
+            statusMessage = error.localizedDescription
+            isErrorStatus = true
+        }
     }
 
     private func revealConfig() {
