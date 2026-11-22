@@ -86,7 +86,7 @@ enum MiseProjectDiscovery {
             guard root.path.hasPrefix(homePath + "/"), TemporaryBuildOutput.isRealDirectory(root) else { continue }
             roots.append(root)
         }
-        return deduplicate(roots)
+        return uniqueSorted(roots)
     }
 
     /// Maps a mise config file (including `.config/mise/conf.d/*.toml`, `.mise/config.toml`, etc.)
@@ -117,16 +117,9 @@ enum MiseProjectDiscovery {
         return CleanupPath.fileURL(dir)
     }
 
-    /// Sorts roots and removes duplicates or roots already contained inside a shallower root.
-    static func deduplicate(_ roots: [URL]) -> [URL] {
-        let sorted = Set(roots.map(CleanupPath.fileURL)).sorted { $0.path < $1.path }
-        var kept: [URL] = []
-        for root in sorted {
-            if kept.contains(where: { root.path == $0.path || root.path.hasPrefix($0.path + "/") }) {
-                continue
-            }
-            kept.append(root)
-        }
-        return kept
+    /// Sorts roots and removes exact duplicates while preserving nested tracked roots
+    /// that an ancestor walk could miss due to depth limits.
+    static func uniqueSorted(_ roots: [URL]) -> [URL] {
+        Set(roots.map(CleanupPath.fileURL)).sorted { $0.path < $1.path }
     }
 }
