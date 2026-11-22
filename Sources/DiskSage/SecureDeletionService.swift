@@ -53,6 +53,10 @@ struct CleanupService: Sendable {
                  try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
              } else if candidate.deletionMode == .toolCommand {
                  return try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture())
+             } else if candidate.deletionMode == .projectCache {
+                 let activity = try CleanupActivity.capture()
+                 try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: activity)
+                 try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              } else {
                  let activity = try CleanupActivity.capture()
                  try activity.requireIdle(candidate.url)
@@ -113,7 +117,7 @@ enum SecureFileDeleter {
 
         try removeChildren(of: targetFD, device: targetInfo.st_dev, displayPath: candidate.url.path, entryRemoved: entryRemoved)
 
-        if candidate.deletionMode == .item {
+        if candidate.deletionMode == .item || candidate.deletionMode == .projectCache {
             guard unlinkat(parentFD, targetName, AT_REMOVEDIR) == 0 else {
                 throw SecureDeletionError.systemCall("Removing \(candidate.url.path)", errno)
             }

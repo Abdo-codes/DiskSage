@@ -52,6 +52,8 @@ enum DeletionMode: String, Codable, Sendable {
     case simulatorDevice
     /// A tool cache, cleaned with the tool's own command (see `ToolCache`).
     case toolCommand
+    /// A Git-verified project cache directory (such as `node_modules`, `target`, or `.venv`).
+    case projectCache
     case generatedFiles
 }
 

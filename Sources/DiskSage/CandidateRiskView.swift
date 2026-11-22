@@ -9,6 +9,7 @@ extension CleanupCandidate {
         case .simulatorDevices: "Refused: DiskSage deletes simulators one device at a time."
         case .simulatorDevice: "Deletes this one simulator device with simctl, including its installed apps and their data."
         case .toolCommand: "Runs the tool's own cleanup command. The tool decides what to keep."
+        case .projectCache: "Deletes this Git-ignored project cache folder after re-checking that it holds no tracked files, nested Git repositories, or active processes."
         }
     }
 }

@@ -57,7 +57,9 @@ struct DiskScanner: Sendable {
                 return result.directories
             }
             let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: currentActivity, home: home)
-            wholeFolders = temporary.candidates + SimulatorInventory.candidates(activity: currentActivity, home: home) +
+            let projectCaches = ProjectCacheInventory.candidates(activity: currentActivity, home: home)
+            wholeFolders = temporary.candidates + projectCaches +
+                SimulatorInventory.candidates(activity: currentActivity, home: home) +
                 ToolCacheInventory.candidates(activity: currentActivity, home: home) +
                 EcosystemCacheInventory.candidates(activity: currentActivity, home: home)
             seeds += temporary.generatedRoots.map {
