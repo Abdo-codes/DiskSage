@@ -11,21 +11,26 @@ enum ProjectCacheInventory {
     static let discoveryDirectoryLimit = 100_000
     static let projectWalkDirectoryLimit = 100_000
 
-    static func discoveryRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+    static func discoveryRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                               miseEnv: MiseProjectDiscovery.Environment? = nil) -> [URL] {
         let home = CleanupPath.fileURL(home)
-        return [
+        let builtIn = [
             home.appending(path: "Developer", directoryHint: .isDirectory),
             home.appending(path: "Documents/Codex", directoryHint: .isDirectory),
         ]
+        let miseRoots = MiseProjectDiscovery.projectRoots(home: home, env: miseEnv)
+        return MiseProjectDiscovery.uniqueSorted(builtIn + miseRoots)
     }
 
     /// Synchronous allowlist check used by `SafetyPolicy`: `url` must sit under an allowed root
     /// and match a project cache rule (including its `beside` marker).
     static func isAllowedScope(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                               rules: ProjectCacheRules = .default) -> Bool {
+                               rules: ProjectCacheRules? = nil,
+                               miseEnv: MiseProjectDiscovery.Environment? = nil) -> Bool {
         let url = CleanupPath.fileURL(url)
-        return discoveryRoots(home: home).contains { root in
-            rules.matchDirectory(url, under: root) != nil
+        let activeRules = rules ?? ProjectCacheRulesLoader.current(home: home)
+        return discoveryRoots(home: home, miseEnv: miseEnv).contains { root in
+            activeRules.matchDirectory(url, under: root) != nil
         }
     }
 
@@ -33,19 +38,21 @@ enum ProjectCacheInventory {
     static func candidates(activity: CleanupActivity, now: Date = Date(),
                            home: URL = FileManager.default.homeDirectoryForCurrentUser,
                            roots: [URL]? = nil,
-                           rules: ProjectCacheRules = .default,
+                           rules: ProjectCacheRules? = nil,
                            minimumBytes: Int64 = defaultMinimumBytes,
                            claudeProjectsDirectory: URL? = nil,
+                           miseEnv: MiseProjectDiscovery.Environment? = nil,
                            git: WorktreeGitProcess = WorktreeGitProcess()) -> [CleanupCandidate] {
-        let searchRoots = (roots ?? discoveryRoots(home: home)).map(CleanupPath.fileURL)
-        let projectRoots = discoverGitProjects(under: searchRoots)
+        let activeRules = rules ?? ProjectCacheRulesLoader.current(home: home)
+        let searchRoots = (roots ?? discoveryRoots(home: home, miseEnv: miseEnv)).map(CleanupPath.fileURL)
+        let projectRoots = discoverGitProjects(under: searchRoots, git: git)
         let claudeDir = claudeProjectsDirectory ?? defaultClaudeProjectsDirectory(home: home)
         let claudeFolders = listSubdirectories(claudeDir)
         var results: [CleanupCandidate] = []
         var seen = Set<String>()
         for project in projectRoots {
             guard !Task.isCancelled else { break }
-            let found = scanProject(project, activity: activity, now: now, home: home, rules: rules,
+            let found = scanProject(project, activity: activity, now: now, home: home, rules: activeRules,
                                     minimumBytes: minimumBytes, claudeDir: claudeDir,
                                     claudeFolders: claudeFolders, git: git)
             for candidate in found where seen.insert(candidate.url.path).inserted {
@@ -64,7 +71,8 @@ enum ProjectCacheInventory {
                             claudeFolders: [String]? = nil,
                             git: WorktreeGitProcess = WorktreeGitProcess()) -> [CleanupCandidate] {
         let root = CleanupPath.fileURL(projectRoot)
-        guard TemporaryBuildOutput.isRealDirectory(root) else { return [] }
+        guard TemporaryBuildOutput.isRealDirectory(root),
+              let defaultRepo = gitWorkTreeTopLevel(for: root, git: git) else { return [] }
         let (matched, nestedRepos) = walkProject(root: root, rules: rules)
         guard !matched.isEmpty else { return [] }
 
@@ -82,7 +90,7 @@ enum ProjectCacheInventory {
         var candidates: [CleanupCandidate] = []
         for (url, match) in matched {
             guard !Task.isCancelled, !activity.contains(url) else { continue }
-            let repo = innermostRepo(for: url, root: root, nestedRepos: nestedRepos)
+            let repo = innermostRepo(for: url, root: defaultRepo, nestedRepos: nestedRepos)
             guard let lastActivity = owningActivity(for: repo),
                   isQuiet(lastActivity: lastActivity, now: now, quietHours: rules.quietHours) else { continue }
             guard (try? verifyGitIgnoredAndUntracked(cacheURL: url, repoRoot: repo, git: git)) != nil else { continue }
@@ -110,9 +118,10 @@ enum ProjectCacheInventory {
     static func verifyBeforeDeletion(_ candidate: CleanupCandidate, activity: CleanupActivity,
                                      now: Date = Date(),
                                      home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                                     rules: ProjectCacheRules = .default,
+                                     rules: ProjectCacheRules? = nil,
                                      claudeProjectsDirectory: URL? = nil,
                                      git: WorktreeGitProcess = WorktreeGitProcess()) throws {
+        let activeRules = rules ?? ProjectCacheRulesLoader.current(home: home)
         let url = CleanupPath.fileURL(candidate.url)
         guard candidate.deletionMode == .projectCache, TemporaryBuildOutput.isRealDirectory(url) else {
             throw SafetyPolicyError.refused("The project cache no longer exists as a directory. Scan again.")
@@ -125,7 +134,7 @@ enum ProjectCacheInventory {
             throw SafetyPolicyError.refused("The project cache is no longer inside a Git repository.")
         }
         let repoRoot = CleanupPath.fileURL(URL(fileURLWithPath: topLevel, isDirectory: true))
-        guard let match = rules.matchDirectory(url, under: repoRoot) else {
+        guard let match = activeRules.matchDirectory(url, under: repoRoot) else {
             throw SafetyPolicyError.refused("The folder no longer matches a project cache rule. Scan again.")
         }
 
@@ -133,7 +142,7 @@ enum ProjectCacheInventory {
         let claudeFolders = listSubdirectories(claudeDir)
         guard let lastActivity = projectLastActivity(root: repoRoot, claudeDir: claudeDir,
                                                      claudeFolders: claudeFolders, git: git),
-              isQuiet(lastActivity: lastActivity, now: now, quietHours: rules.quietHours) else {
+              isQuiet(lastActivity: lastActivity, now: now, quietHours: activeRules.quietHours) else {
             throw FeatureFailure(message: "The project became active after the scan. Nothing was deleted.")
         }
 
@@ -142,15 +151,15 @@ enum ProjectCacheInventory {
             throw SafetyPolicyError.refused("Refused project cache containing \(violation).")
         }
         let survey = try FolderSurvey.read(url, gitAllowedUnder: [])
-        guard survey.idle(at: now) >= rules.quietHours * 3_600 else {
+        guard survey.idle(at: now) >= activeRules.quietHours * 3_600 else {
             throw FeatureFailure(message: "The project cache changed recently. Scan again after it is quiet.")
         }
     }
 
-    static func discoverGitProjects(under roots: [URL]) -> [URL] {
+    static func discoverGitProjects(under roots: [URL], git: WorktreeGitProcess = WorktreeGitProcess()) -> [URL] {
         var found: [URL] = [], seen = Set<String>()
         for root in roots where TemporaryBuildOutput.isRealDirectory(root) {
-            if hasGitEntry(root) {
+            if hasGitEntry(root) || gitWorkTreeTopLevel(for: root, git: git) != nil {
                 if seen.insert(root.path).inserted { found.append(root) }
                 continue
             }
@@ -324,6 +333,11 @@ enum ProjectCacheInventory {
     private static func hasGitEntry(_ dir: URL) -> Bool {
         var info = stat()
         return lstat(dir.appending(path: ".git").path, &info) == 0
+    }
+
+    private static func gitWorkTreeTopLevel(for dir: URL, git: WorktreeGitProcess) -> URL? {
+        guard let top = try? git.text(dir.path, ["rev-parse", "--show-toplevel"]), !top.isEmpty else { return nil }
+        return CleanupPath.fileURL(URL(fileURLWithPath: top, isDirectory: true))
     }
 
     private static func fileIdentity(of url: URL) -> FileIdentity? {
