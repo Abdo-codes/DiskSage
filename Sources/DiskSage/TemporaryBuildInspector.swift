@@ -47,13 +47,14 @@ enum TemporaryBuildInspector {
                         home: URL = FileManager.default.homeDirectoryForCurrentUser) -> CleanupCandidate? {
         let url = CleanupPath.fileURL(url)
         guard let kind = TemporaryBuildOutput.kind(of: url, home: home), !activity.contains(url),
-              let survey = try? survey(url, kind: kind), survey.bytes > 0,
-              let risk = risk(kind, survey, now: now) else { return nil }
+              let survey = try? survey(url, kind: kind), survey.bytes > 0 else { return nil }
+        let orphaned = kind == .xcodeProjectBuild && XcodeWorkspaceStatus.check(derivedDataFolder: url).isMissing
+        guard let risk = risk(kind, survey, now: now, orphanedWorkspace: orphaned) else { return nil }
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return nil }
         let name = url.path.hasPrefix(home.path + "/") ? String(url.path.dropFirst(home.path.count + 1)) : url.path
         let candidate = CleanupCandidate(url: url, name: name, category: TemporaryBuildOutput.category(kind),
-            size: survey.bytes, risk: risk, reason: reason(kind, survey, now: now),
+            size: survey.bytes, risk: risk, reason: reason(kind, survey, now: now, orphanedWorkspace: orphaned),
             identity: FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)), deletionMode: .item)
         guard (try? SafetyPolicy(home: home, now: now).validate(candidate)) != nil else { return nil }
         return candidate
@@ -72,7 +73,8 @@ enum TemporaryBuildInspector {
             throw FeatureFailure(message: "A Claude session still uses this folder. Nothing was deleted.")
         }
         let current = try survey(url, kind: kind)
-        guard let risk = risk(kind, current, now: now), risk <= candidate.risk else {
+        let orphaned = kind == .xcodeProjectBuild && XcodeWorkspaceStatus.check(derivedDataFolder: url).isMissing
+        guard let risk = risk(kind, current, now: now, orphanedWorkspace: orphaned), risk <= candidate.risk else {
             throw FeatureFailure(message: "The folder changed after the scan. Scan again.")
         }
     }
@@ -100,19 +102,34 @@ enum TemporaryBuildInspector {
     /// Agent folders whose videos can be the only copy, such as reference clips or screen recordings.
     private static let mayHoldOnlyCopies: Set<TemporaryBuildOutput.Kind> = [.scratchpad, .codexVisualizationDay, .codexSessionDay]
 
-    /// The kind's risk, raised to high when an agent folder holds video files.
-    static func risk(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date) -> RiskLevel? {
-        guard let base = TemporaryBuildOutput.risk(kind, idle: survey.idle(at: now)) else { return nil }
+    /// The kind's risk, raised to high when an agent folder holds video files, or low for orphaned DerivedData.
+    static func risk(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date,
+                     orphanedWorkspace: Bool = false) -> RiskLevel? {
+        let idle = survey.idle(at: now)
+        if orphanedWorkspace, kind == .xcodeProjectBuild {
+            return idle >= TemporaryBuildOutput.hour ? .low : nil
+        }
+        guard let base = TemporaryBuildOutput.risk(kind, idle: idle) else { return nil }
         return survey.mediaBytes > 0 && mayHoldOnlyCopies.contains(kind) ? .high : base
     }
 
-    private static func reason(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date) -> String {
+    private static func reason(_ kind: TemporaryBuildOutput.Kind, _ survey: FolderSurvey, now: Date,
+                               orphanedWorkspace: Bool = false) -> String {
+        if orphanedWorkspace, kind == .xcodeProjectBuild {
+            let idle = survey.idle(at: now)
+            let age = idle >= 2 * TemporaryBuildOutput.day
+                ? "\(Int(idle / TemporaryBuildOutput.day)) days"
+                : "\(Int(idle / TemporaryBuildOutput.hour)) hours"
+            return "Xcode DerivedData whose workspace no longer exists (no changes for \(age)). The whole folder is deleted."
+        }
         let reason = TemporaryBuildOutput.reason(kind, idle: survey.idle(at: now))
         guard survey.mediaBytes > 0, mayHoldOnlyCopies.contains(kind) else { return reason }
         return reason + " It holds video files. Keep them if no other copy exists."
     }
 
     private static func survey(_ url: URL, kind: TemporaryBuildOutput.Kind) throws -> FolderSurvey {
-        try FolderSurvey.read(url, gitAllowedUnder: TemporaryBuildOutput.gitAllowedUnder(kind))
+        let result = try FolderSurvey.read(url, gitAllowedUnder: TemporaryBuildOutput.gitAllowedUnder(kind))
+        try SwiftPMCheckoutGuard.verify(url, kind: kind)
+        return result
     }
 }

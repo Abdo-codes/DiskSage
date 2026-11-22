@@ -37,6 +37,29 @@ struct TemporaryBuildFixture {
         return CleanupPath.fileURL(base.appending(path: path))
     }
 
+    /// Creates a real SwiftPM bare mirror in `<container>/repositories/<name>-1` and a clean checkout in
+    /// `<container>/checkouts/<name>` cloned from it, matching SwiftPM's on-disk layout.
+    @discardableResult
+    func swiftPMClone(in container: String, name: String = "pkg") throws -> (mirror: URL, checkout: URL) {
+        let git = WorktreeGitProcess()
+        let upstream = try folder(".upstream-\(UUID().uuidString)")
+        _ = try git.run(upstream.path, ["init", "-b", "main"])
+        _ = try git.run(upstream.path, ["config", "user.name", "Test"])
+        _ = try git.run(upstream.path, ["config", "user.email", "test@example.com"])
+        try Data("public let x = 1\n".utf8).write(to: upstream.appending(path: "Package.swift"))
+        _ = try git.run(upstream.path, ["add", "Package.swift"])
+        _ = try git.run(upstream.path, ["commit", "-m", "Initial"])
+
+        let reposDir = try folder("\(container)/repositories")
+        let checkoutsDir = try folder("\(container)/checkouts")
+        let mirror = CleanupPath.fileURL(reposDir.appending(path: "\(name)-1"))
+        let checkout = CleanupPath.fileURL(checkoutsDir.appending(path: name))
+        _ = try git.run(reposDir.path, ["clone", "--mirror", upstream.path, mirror.path])
+        _ = try git.run(checkoutsDir.path, ["clone", mirror.path, checkout.path])
+        try? FileManager.default.removeItem(at: upstream)
+        return (mirror, checkout)
+    }
+
     func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
     func remove() { try? FileManager.default.removeItem(at: base) }
 }

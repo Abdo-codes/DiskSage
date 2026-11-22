@@ -50,7 +50,11 @@ struct FolderSurvey: Sendable {
     private static func isGitData(_ url: URL, values: URLResourceValues) -> Bool {
         if url.lastPathComponent.lowercased() == ".git" { return true }
         guard url.lastPathComponent == "HEAD", values.isRegularFile == true else { return false }
-        return FileManager.default.fileExists(atPath: url.deletingLastPathComponent().appending(path: "objects").path)
+        let parent = url.deletingLastPathComponent()
+        let manager = FileManager.default
+        return manager.fileExists(atPath: parent.appending(path: "objects").path) ||
+            manager.fileExists(atPath: parent.appending(path: "commondir").path) ||
+            manager.fileExists(atPath: parent.appending(path: "gitdir").path)
     }
 
     /// The latest of the content, status and birth times of the item itself (links are not followed).
