@@ -139,18 +139,19 @@ struct DiskScanner: Sendable {
 
     static func allocatedSize(of root: URL) -> Int64? {
         guard !Task.isCancelled else { return nil }
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        var tally = ReclaimableSize.Tally()
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys),
             options: [], errorHandler: { _, _ in true }) else {
-            let values = try? root.resourceValues(forKeys: keys)
-            return Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            tally.add(path: root.path)
+            return tally.total
         }
-        var total: Int64 = 0
         for case let fileURL as URL in enumerator {
             guard !Task.isCancelled else { return nil }
-            guard let values = try? fileURL.resourceValues(forKeys: keys), values.isSymbolicLink != true else { continue }
-            if values.isRegularFile == true { total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0) }
+            guard let values = try? fileURL.resourceValues(forKeys: keys),
+                  values.isSymbolicLink != true, values.isRegularFile == true else { continue }
+            tally.add(path: fileURL.path)
         }
-        return total
+        return tally.total
     }
 }

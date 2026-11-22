@@ -25,7 +25,7 @@ struct FolderSurvey: Sendable {
             errorHandler: { _, _ in failed = true; return false }) else {
             throw FeatureFailure(message: "The folder could not be read.")
         }
-        var bytes: Int64 = 0, media: Int64 = 0, count = 0
+        var tally = ReclaimableSize.Tally(), media: Int64 = 0, count = 0
         for case let url as URL in walker {
             try Task.checkCancellation()
             count += 1
@@ -38,13 +38,14 @@ struct FolderSurvey: Sendable {
                 throw FeatureFailure(message: "The folder contains Git data. Review it with Git Worktrees instead.")
             }
             if values.isRegularFile == true {
-                let size = Int64(values.totalFileAllocatedSize ?? 0)
-                bytes += size
-                if videoExtensions.contains(url.pathExtension.lowercased()) { media += size }
+                let entry = tally.add(path: url.path)
+                if videoExtensions.contains(url.pathExtension.lowercased()) {
+                    media += entry?.allocated ?? Int64(values.totalFileAllocatedSize ?? 0)
+                }
             }
         }
         guard !failed else { throw FeatureFailure(message: "Some files in the folder could not be read.") }
-        return Self(bytes: bytes, newestChange: newest, mediaBytes: media)
+        return Self(bytes: tally.total, newestChange: newest, mediaBytes: media)
     }
 
     private static func isGitData(_ url: URL, values: URLResourceValues) -> Bool {
