@@ -114,22 +114,74 @@ struct ToolCacheTests {
         let miseDir = CleanupPath.fileURL(f.base.appending(path: "Library/Caches/mise"))
         let pnpmDir = CleanupPath.fileURL(f.base.appending(path: "Library/pnpm/store"))
         let pipDir = CleanupPath.fileURL(f.base.appending(path: "Library/Caches/pip"))
-        let allowed: Set<String> = ["/opt/homebrew/bin/mise", "/opt/homebrew/bin/pnpm", "/opt/homebrew/bin/pip3"]
+        let allowed: Set<String> = ["/opt/homebrew/bin/mise", "/opt/homebrew/bin/pnpm", "/opt/homebrew/bin/pip3", "/opt/homebrew/bin/node"]
         let trusted: ToolCacheInventory.Trusted = { allowed.contains($0) }
+        let miseDryRun = FakeTool(dryRun: "mise pruning /tmp/old.tar\nmise cache pruned 2 files, 150.0 MiB\n")
 
-        let found = ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted, run: FakeTool().run, size: big)
+        let found = ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted, run: miseDryRun.run, size: big)
         #expect(Set(found.map(\.url)) == Set([miseDir, pnpmDir, pipDir]))
+        let miseCandidate = try #require(found.first { $0.url == miseDir })
+        #expect(miseCandidate.size == 150 * 1_048_576)
         for candidate in found {
             try SafetyPolicy(home: f.base).validate(candidate)
         }
+
+        // When mise --dry-run reports 0 B prunable, mise is not offered even if the cache directory is large.
+        let miseNothing = FakeTool(dryRun: "mise cache pruned 0 files, 0 B\n")
+        let withoutMise = ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted, run: miseNothing.run, size: big)
+        #expect(!withoutMise.contains(where: { $0.url == miseDir }))
 
         let tool = FakeTool()
         for candidate in found {
             try ToolCacheInventory.clean(candidate, activity: .idle, home: f.base, trusted: trusted, run: tool.run)
         }
         #expect(tool.calls.contains { $0.0 == "/opt/homebrew/bin/mise" && $0.1 == ["cache", "prune"] && $0.2["MISE_CACHE_DIR"] == miseDir.path })
-        #expect(tool.calls.contains { $0.0 == "/opt/homebrew/bin/pnpm" && $0.1 == ["store", "prune"] && $0.2["npm_config_store_dir"] == pnpmDir.path })
-        #expect(tool.calls.contains { $0.0 == "/opt/homebrew/bin/pip3" && $0.1 == ["cache", "purge"] && $0.2["PIP_CACHE_DIR"] == pipDir.path })
+        #expect(tool.calls.contains {
+            $0.0 == "/opt/homebrew/bin/pnpm" && $0.1 == ["store", "prune"] &&
+                $0.2["npm_config_store_dir"] == pnpmDir.path &&
+                $0.2["PATH"] == "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        })
+        #expect(tool.calls.contains { $0.0 == "/opt/homebrew/bin/pip3" && $0.1 == ["cache", "purge"] && $0.2["PIP_CACHE_DIR"] == pipDir.path && $0.2["PATH"] == nil })
+    }
+
+    @Test func measuresActualBytesRemovedByPartialPruneAndReadsMiseDryRun() throws {
+        #expect(ToolCache.freedBytes(fromDryRun: "mise cache pruned 1 files, 2.0 MiB\n") == 2 * 1_048_576)
+        #expect(ToolCache.freedBytes(fromDryRun: "mise cache pruned 0 files, 0 B\n") == 0)
+        #expect(ToolCache.freedBytes(fromDryRun: "mise cache pruned 4 files, 1.5 GiB\n") == Int64(1.5 * 1_073_741_824))
+
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        try f.write("Library/Caches/mise/old.tar")
+        let miseDir = CleanupPath.fileURL(f.base.appending(path: "Library/Caches/mise"))
+        let trusted: ToolCacheInventory.Trusted = { $0 == "/opt/homebrew/bin/mise" }
+        let dryRun = FakeTool(dryRun: "mise cache pruned 2 files, 200.0 MiB\n")
+        let candidate = try #require(ToolCacheInventory.candidates(activity: .idle, home: f.base, trusted: trusted,
+                                                                   run: dryRun.run, size: big).first)
+        #expect(candidate.url == miseDir)
+
+        // Simulate a partial prune: folder drops from 200 MiB to 160 MiB -> reports 40 MiB actually removed.
+        var reads = [200 * 1_048_576, 160 * 1_048_576] as [Int64]
+        let removal = try ToolCacheInventory.clean(candidate, activity: .idle, home: f.base, trusted: trusted,
+                                                   run: FakeTool().run, size: { _ in reads.removeFirst() })
+        #expect(removal == CleanupRemoval(removedBytes: 40 * 1_048_576, skippedFiles: 0))
+
+        // Simulate a no-op prune: folder unchanged -> reports 0 removed bytes.
+        let noop = try ToolCacheInventory.clean(candidate, activity: .idle, home: f.base, trusted: trusted,
+                                                run: FakeTool().run, size: { _ in 160 * 1_048_576 })
+        #expect(noop == CleanupRemoval(removedBytes: 0, skippedFiles: 0))
+    }
+
+    @Test func nodeRuntimePathIsIncludedForNodeShimsAndOmittedWhenUntrusted() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let yarn = try #require(ToolCache.all(home: f.base).first { $0.name == "Yarn 1 package cache" })
+        let trustedNode: ToolCacheInventory.Trusted = { $0 == "/opt/homebrew/bin/node" }
+        let envWithNode = ToolCacheInventory.executionEnvironment(for: yarn, executable: "/opt/homebrew/bin/yarn",
+                                                                  home: f.base, trusted: trustedNode)
+        #expect(envWithNode["PATH"] == "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+
+        let noNode: ToolCacheInventory.Trusted = { _ in false }
+        let envWithoutNode = ToolCacheInventory.executionEnvironment(for: yarn, executable: "/opt/homebrew/bin/yarn",
+                                                                     home: f.base, trusted: noNode)
+        #expect(envWithoutNode["PATH"] == nil)
     }
 
     @Test func bunRequiresVersionAtLeast144() throws {

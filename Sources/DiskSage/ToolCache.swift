@@ -36,6 +36,8 @@ struct ToolCache: Sendable, Equatable {
     let estimateArguments: [String]?
     let environment: [String: String]
     let preflightChecks: [PreflightCheck]
+    /// True for Node-based tools (such as Corepack shims for pnpm/Yarn) that invoke `#!/usr/bin/env node`.
+    let needsNodeRuntime: Bool
     let reason: String
 
     static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [ToolCache] {
@@ -58,6 +60,7 @@ struct ToolCache: Sendable, Equatable {
                                     // Cleanup must never uninstall unused dependencies.
                                     "HOMEBREW_NO_AUTOREMOVE": "1"],
                       preflightChecks: [],
+                      needsNodeRuntime: false,
                       reason: "Homebrew downloads and old versions of installed packages. `brew cleanup -s` removes them; Homebrew downloads them again when needed."),
             ToolCache(name: "uv package cache", folder: uv,
                       executables: ["/opt/homebrew/bin/uv", "/usr/local/bin/uv",
@@ -66,14 +69,17 @@ struct ToolCache: Sendable, Equatable {
                       estimateArguments: nil,
                       environment: [:],
                       preflightChecks: [],
+                      needsNodeRuntime: false,
                       reason: "Python packages that uv downloaded. `uv cache clean` waits until no uv process uses the cache; uv downloads the packages again when needed."),
             ToolCache(name: "mise download cache", folder: mise,
                       executables: ["/opt/homebrew/bin/mise", "/usr/local/bin/mise",
                                     home.appending(path: ".local/bin/mise").path, home.appending(path: ".cargo/bin/mise").path],
                       arguments: ["cache", "prune"],
-                      estimateArguments: nil,
+                      // `mise cache prune` only removes files not accessed within `cache_prune_age`, so estimate via `--dry-run`.
+                      estimateArguments: ["cache", "prune", "--dry-run"],
                       environment: ["MISE_CACHE_DIR": mise.path],
                       preflightChecks: [],
+                      needsNodeRuntime: false,
                       reason: "Stale download archives cached by mise. `mise cache prune` removes unused archives and keeps installed tool versions."),
             ToolCache(name: "pnpm package store", folder: pnpm,
                       executables: ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm",
@@ -84,6 +90,7 @@ struct ToolCache: Sendable, Equatable {
                       estimateArguments: nil,
                       environment: ["npm_config_store_dir": pnpm.path],
                       preflightChecks: [],
+                      needsNodeRuntime: true,
                       reason: "Unreferenced packages in the pnpm store. `pnpm store prune` removes only unused packages; projects keep their dependencies."),
             ToolCache(name: "pip package cache", folder: pip,
                       executables: ["/opt/homebrew/bin/pip3", "/usr/local/bin/pip3", "/usr/bin/pip3"],
@@ -91,6 +98,7 @@ struct ToolCache: Sendable, Equatable {
                       estimateArguments: nil,
                       environment: ["PIP_CACHE_DIR": pip.path],
                       preflightChecks: [],
+                      needsNodeRuntime: false,
                       reason: "Python wheels and source archives cached by pip. `pip3 cache purge` removes them; pip downloads packages again when needed."),
             ToolCache(name: "Bun package cache", folder: bun,
                       executables: [home.appending(path: ".bun/bin/bun").path,
@@ -104,6 +112,7 @@ struct ToolCache: Sendable, Equatable {
                           requirePattern: #"^[0-9]+\.[0-9]+\.[0-9]+"#,
                           refusePattern: #"^(0\.|1\.[0-3]\.|1\.4\.[0-3]([^0-9]|$))"#,
                           refusalReason: "Bun before 1.4.4 does not support `bun pm cache prune`.")],
+                      needsNodeRuntime: false,
                       reason: "Older package folders cached by Bun. `bun pm cache prune` removes stale packages while keeping global store links."),
             ToolCache(name: "Yarn 1 package cache", folder: yarn,
                       executables: ["/opt/homebrew/bin/yarn", "/usr/local/bin/yarn",
@@ -117,15 +126,52 @@ struct ToolCache: Sendable, Equatable {
                           requirePattern: #"^[0-9]+\.[0-9]+\.[0-9]+"#,
                           refusePattern: #"^(0|[2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+"#,
                           refusalReason: "Only Yarn 1 uses this global cache folder.")],
+                      needsNodeRuntime: true,
                       reason: "Node packages cached by Yarn 1. `yarn cache clean` removes them; Yarn downloads packages again when needed."),
         ]
     }
 
-    /// Reads "This operation would free approximately 1.2GB of disk space." Homebrew uses units of 1000.
+    /// Trusted directories that may hold a `node` binary for Node-based tool launchers.
+    static func trustedNodeCandidates(home: URL, executable: String) -> [String] {
+        let home = CleanupPath.fileURL(home)
+        let execDir = URL(fileURLWithPath: executable).deletingLastPathComponent().path
+        var dirs = [execDir, "/opt/homebrew/bin", "/usr/local/bin", home.appending(path: ".volta/bin").path]
+        if let resolved = realpath(executable, nil) {
+            let resolvedDir = URL(fileURLWithPath: String(cString: resolved)).deletingLastPathComponent().path
+            free(resolved)
+            dirs.insert(resolvedDir, at: 1)
+        }
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }.map { $0 + "/node" }
+    }
+
+    /// Reads dry-run summaries from Homebrew ("would free approximately 1.2GB")
+    /// and mise ("mise cache pruned 3 files, 24.5 MiB").
     static func freedBytes(fromDryRun text: String) -> Int64 {
-        guard let match = text.firstMatch(of: #/would free approximately ([0-9]+(?:\.[0-9]+)?)(B|KB|MB|GB)/#),
-              let value = Double(match.1) else { return 0 }
-        let scale: Double = switch match.2 { case "KB": 1e3; case "MB": 1e6; case "GB": 1e9; default: 1 }
+        let cleaned = text.replacingOccurrences(of: #"\u{001B}\[[0-9;?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+        if let match = cleaned.firstMatch(of: #/would free approximately ([0-9]+(?:\.[0-9]+)?)(B|KB|MB|GB|TB)/#),
+           let value = Double(match.1) {
+            return scaledBytes(value, unit: String(match.2))
+        }
+        if let match = cleaned.firstMatch(of: #/mise cache pruned [0-9]+ files?, ([0-9]+(?:\.[0-9]+)?)\s*(B|KiB|MiB|GiB|TiB|KB|MB|GB|TB)/#),
+           let value = Double(match.1) {
+            return scaledBytes(value, unit: String(match.2))
+        }
+        return 0
+    }
+
+    private static func scaledBytes(_ value: Double, unit: String) -> Int64 {
+        let scale: Double = switch unit {
+        case "KiB": 1_024
+        case "MiB": 1_048_576
+        case "GiB": 1_073_741_824
+        case "TiB": 1_099_511_627_776
+        case "KB": 1e3
+        case "MB": 1e6
+        case "GB": 1e9
+        case "TB": 1e12
+        default: 1
+        }
         return Int64(value * scale)
     }
 
