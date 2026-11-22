@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import DiskSage
@@ -376,5 +377,15 @@ struct MiseAndCustomRulesTests {
         let finalConfig = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
         #expect(finalConfig.quietHours == 48)
         #expect(finalConfig.refuseInside?["_build"] == ["custom/*"])
+    }
+
+    @Test func loadConfigRejectsFifoWithoutBlocking() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let fifo = f.base.appending(path: ".config/disksage/rules.json")
+        try FileManager.default.createDirectory(at: fifo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        #expect(throws: (any Error).self) {
+            _ = try ProjectCacheRulesLoader.loadConfig(from: fifo)
+        }
     }
 }

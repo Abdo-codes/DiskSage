@@ -169,7 +169,7 @@ enum ProjectCacheRulesLoader {
     }
 
     private static func readRawData(from url: URL) throws -> Data? {
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW)
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         if fd < 0 {
             if errno == ENOENT { return nil }
             if errno == ELOOP {
