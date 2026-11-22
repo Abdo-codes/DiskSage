@@ -87,4 +87,31 @@ struct ReclaimableSizeTests {
         #expect(ReclaimableSize.measure(linkURL.path) == nil)
         #expect(try #require(DiskScanner.allocatedSize(of: f.base.appending(path: "cache"))) == 0)
     }
+
+    @Test func divergedAndReclonedAPFSFamilyCountsDistinctSharedExtents() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let block = 64 * 1024
+        let cache = try f.folder("cache")
+        let a = try f.write("cache/a.bin", bytes: block * 2)
+        let b = cache.appending(path: "b.bin")
+        guard clonefile(a.path, b.path, 0) == 0 else { return }
+        // Overwrite the first half of B so A holds [X, Y] and B holds [Z, Y].
+        let handle = try FileHandle(forUpdating: b)
+        try handle.seek(toOffset: 0)
+        try handle.write(contentsOf: Data(repeating: 9, count: block))
+        try handle.close()
+        // Re-clone both A and B so all four files share every block (0 private bytes each),
+        // while the family collectively occupies 3 distinct blocks (X, Y, Z).
+        let a2 = cache.appending(path: "a2.bin")
+        let b2 = cache.appending(path: "b2.bin")
+        guard clonefile(a.path, a2.path, 0) == 0, clonefile(b.path, b2.path, 0) == 0 else { return }
+
+        for url in [a, b, a2, b2] {
+            let entry = try #require(ReclaimableSize.measure(url.path))
+            #expect(entry.bytes == 0)
+        }
+        let expected = Int64(block * 3)
+        #expect(try #require(DiskScanner.allocatedSize(of: cache)) == expected)
+        #expect(try FolderSurvey.read(cache).bytes == expected)
+    }
 }
