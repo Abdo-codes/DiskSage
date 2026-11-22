@@ -8,37 +8,22 @@ struct ProjectCacheRulesSettingsView: View {
     @State private var extraRootsText = ""
     @State private var extraNamesText = ""
     @State private var extraSkipText = ""
+    @State private var loadedRootsText = ""
+    @State private var loadedNamesText = ""
+    @State private var loadedSkipText = ""
     @State private var preservedConfig = ProjectCacheRulesLoader.UserConfig()
     @State private var loadError: String?
     @State private var statusMessage: String?
     @State private var isErrorStatus = false
     @State private var isLoaded = false
 
-    private var extraRootsList: [String] {
-        extraRootsText.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
+    private var extraRootsList: [String] { ProjectCacheRulesLoader.parseLines(extraRootsText) }
+    private var extraNamesList: [String] { ProjectCacheRulesLoader.parseLines(extraNamesText) }
+    private var extraSkipList: [String] { ProjectCacheRulesLoader.parseLines(extraSkipText) }
 
-    private var extraNamesList: [String] {
-        parseCommaList(extraNamesText)
-    }
-
-    private var extraSkipList: [String] {
-        parseCommaList(extraSkipText)
-    }
-
-    private var invalidRoots: [String] {
-        ProjectCacheRulesLoader.invalidExtraRoots(extraRootsList)
-    }
-
-    private var invalidNames: [String] {
-        extraNamesList.filter { !ProjectCacheRules.isValidRuleName($0) }
-    }
-
-    private var invalidSkips: [String] {
-        extraSkipList.filter { !ProjectCacheRulesLoader.isValidSkipName($0) }
-    }
+    private var invalidRoots: [String] { ProjectCacheRulesLoader.invalidExtraRoots(extraRootsList) }
+    private var invalidNames: [String] { extraNamesList.filter { !ProjectCacheRules.isValidRuleName($0) } }
+    private var invalidSkips: [String] { extraSkipList.filter { !ProjectCacheRulesLoader.isValidSkipName($0) } }
 
     private var hasValidationError: Bool {
         !invalidRoots.isEmpty || !invalidNames.isEmpty || !invalidSkips.isEmpty
@@ -52,13 +37,13 @@ struct ProjectCacheRulesSettingsView: View {
                     .foregroundStyle(.orange)
             }
             Stepper("Project quiet period: \(quietHours) \(quietHours == 1 ? "hour" : "hours")",
-                    value: $quietHours, in: 1...168)
+                    value: $quietHours, in: ProjectCacheRulesLoader.editableQuietHoursRange)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Extra project folders, one per line")
                 TextEditor(text: $extraRootsText)
                     .font(.body.monospaced())
-                    .frame(minHeight: 56)
+                    .frame(minHeight: 52)
                 if !invalidRoots.isEmpty {
                     Text("Use folders under ~ (excluding ~/Library and symlinks): \(invalidRoots.joined(separator: ", "))")
                         .font(.caption)
@@ -66,18 +51,28 @@ struct ProjectCacheRulesSettingsView: View {
                 }
             }
 
-            TextField("Extra cache folder names", text: $extraNamesText, prompt: Text(".cache-build, out"))
-            if !invalidNames.isEmpty {
-                Text("Invalid cache names (VCS names and .. are refused): \(invalidNames.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Extra cache folder names, one per line")
+                TextEditor(text: $extraNamesText)
+                    .font(.body.monospaced())
+                    .frame(minHeight: 44)
+                if !invalidNames.isEmpty {
+                    Text("Invalid cache names (VCS names and .. are refused): \(invalidNames.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
-            TextField("Additional skipped folder names", text: $extraSkipText, prompt: Text("third_party, archive"))
-            if !invalidSkips.isEmpty {
-                Text("Skip names must be single folder names without slashes: \(invalidSkips.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Additional skipped folder names, one per line")
+                TextEditor(text: $extraSkipText)
+                    .font(.body.monospaced())
+                    .frame(minHeight: 44)
+                if !invalidSkips.isEmpty {
+                    Text("Skip names must be single folder names without slashes: \(invalidSkips.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
             HStack(spacing: 10) {
@@ -110,11 +105,17 @@ struct ProjectCacheRulesSettingsView: View {
         do {
             let config = try ProjectCacheRulesLoader.loadConfig(from: url)
             let editableHours = try ProjectCacheRulesLoader.editableQuietHours(from: config)
+            let rootsText = try ProjectCacheRulesLoader.editableLines(from: config.extraRoots, field: "extra_roots")
+            let namesText = try ProjectCacheRulesLoader.editableLines(from: config.names, field: "names")
+            let skipText = try ProjectCacheRulesLoader.editableLines(from: config.skip, field: "skip")
             preservedConfig = config
             quietHours = editableHours
-            extraRootsText = (config.extraRoots ?? []).joined(separator: "\n")
-            extraNamesText = (config.names ?? []).joined(separator: ", ")
-            extraSkipText = (config.skip ?? []).joined(separator: ", ")
+            extraRootsText = rootsText
+            extraNamesText = namesText
+            extraSkipText = skipText
+            loadedRootsText = rootsText
+            loadedNamesText = namesText
+            loadedSkipText = skipText
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -124,12 +125,21 @@ struct ProjectCacheRulesSettingsView: View {
     private func save() {
         var updated = preservedConfig
         updated.quietHours = Double(quietHours) == ProjectCacheRules.default.quietHours ? nil : Double(quietHours)
-        updated.extraRoots = extraRootsList.isEmpty ? nil : extraRootsList
-        updated.names = extraNamesList.isEmpty ? nil : extraNamesList
-        updated.skip = extraSkipList.isEmpty ? nil : extraSkipList
+        if extraRootsText != loadedRootsText {
+            updated.extraRoots = extraRootsList.isEmpty ? nil : extraRootsList
+        }
+        if extraNamesText != loadedNamesText {
+            updated.names = extraNamesList.isEmpty ? nil : extraNamesList
+        }
+        if extraSkipText != loadedSkipText {
+            updated.skip = extraSkipList.isEmpty ? nil : extraSkipList
+        }
         do {
             try ProjectCacheRulesLoader.save(updated)
             preservedConfig = updated
+            loadedRootsText = extraRootsText
+            loadedNamesText = extraNamesText
+            loadedSkipText = extraSkipText
             statusMessage = "Saved."
             isErrorStatus = false
         } catch {
@@ -155,11 +165,5 @@ struct ProjectCacheRulesSettingsView: View {
             NSWorkspace.shared.open(FileManager.default.fileExists(atPath: folder.path)
                 ? folder : FileManager.default.homeDirectoryForCurrentUser)
         }
-    }
-
-    private func parseCommaList(_ text: String) -> [String] {
-        text.split(whereSeparator: { $0 == "," || $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
     }
 }

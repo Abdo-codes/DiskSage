@@ -244,4 +244,16 @@ struct MiseAndCustomRulesTests {
             }
         }
     }
+
+    @Test func editableLinesRoundTripsCommasLosslesslyAndRejectsUnsafeEntries() throws {
+        let entries = ["archive,old", "vendor,cache"]
+        let text = try ProjectCacheRulesLoader.editableLines(from: entries, field: "skip")
+        #expect(ProjectCacheRulesLoader.parseLines(text) == entries)
+
+        for nonRoundTrippable in [["line\nbreak"], [" leading"], ["trailing "], [""]] {
+            #expect(throws: (any Error).self) {
+                _ = try ProjectCacheRulesLoader.editableLines(from: nonRoundTrippable, field: "skip")
+            }
+        }
+    }
 }

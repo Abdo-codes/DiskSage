@@ -45,6 +45,28 @@ enum ProjectCacheRulesLoader {
         return Int(raw)
     }
 
+    /// Formats an array of rule entries as one entry per line, failing if any entry cannot round-trip losslessly.
+    static func editableLines(from entries: [String]?, field: String) throws -> String {
+        guard let entries else { return "" }
+        for entry in entries {
+            let trimmed = entry.trimmingCharacters(in: .whitespaces)
+            guard !entry.isEmpty,
+                  trimmed == entry,
+                  !entry.contains(where: \.isNewline) else {
+                throw FeatureFailure(
+                    message: "\(field) contains entries that cannot be edited line-by-line safely. Edit rules.json directly."
+                )
+            }
+        }
+        return entries.joined(separator: "\n")
+    }
+
+    static func parseLines(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     static func configURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                           env: [String: String]? = nil) -> URL {
         let canonicalHome = CleanupPath.fileURL(home)
