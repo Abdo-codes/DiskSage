@@ -42,7 +42,10 @@ struct ReviewHeader: View {
 struct ReviewFilterBar: View {
     @Binding var query: String
     @Binding var risk: ReviewRiskFilter
+    @Binding var category: ReviewCategoryFilter
+    @Binding var sort: ReviewSortOrder
     let visibleCount: Int
+    let visibleBytes: Int64
     let totalCount: Int
     let hasSelection: Bool
     let canSelectLowRisk: Bool
@@ -50,21 +53,38 @@ struct ReviewFilterBar: View {
     let clearSelection: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            TextField("Search name or path", text: $query).textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Search cleanup candidates")
-                .frame(minWidth: 180)
-            Picker("Risk", selection: $risk) {
-                ForEach(ReviewRiskFilter.allCases) { Text($0.title).tag($0) }
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                TextField("Search name, path, or category", text: $query).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Search cleanup candidates")
+                    .frame(minWidth: 180)
+                Picker("Category", selection: $category) {
+                    ForEach(ReviewCategoryFilter.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().frame(width: 124).accessibilityLabel("Filter by category")
+                Picker("Risk", selection: $risk) {
+                    ForEach(ReviewRiskFilter.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().frame(width: 114).accessibilityLabel("Filter by risk")
+                Picker("Sort", selection: $sort) {
+                    ForEach(ReviewSortOrder.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().frame(width: 118).accessibilityLabel("Sort candidates")
             }
-            .labelsHidden().frame(width: 125).accessibilityLabel("Filter by risk")
-            Text("\(visibleCount) of \(totalCount)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            Button("Select Visible Low Risk", action: selectLowRisk).disabled(!canSelectLowRisk)
-                .help("Select only low-risk items in the current results. Hidden selections stay selected.")
-            Button("Clear All", action: clearSelection).disabled(!hasSelection)
+            HStack(spacing: 10) {
+                Text(summaryLabel).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Spacer()
+                Button("Select Visible Low Risk", action: selectLowRisk).disabled(!canSelectLowRisk)
+                    .help("Select only low-risk items in the current results. Hidden selections stay selected.")
+                Button("Clear All", action: clearSelection).disabled(!hasSelection)
+            }
         }
         .controlSize(.small)
         .padding(.horizontal, 18).padding(.vertical, 10)
+    }
+
+    private var summaryLabel: String {
+        visibleCount > 0 ? "\(visibleCount) of \(totalCount) · \(visibleBytes.diskSize)" : "\(visibleCount) of \(totalCount)"
     }
 }
 
