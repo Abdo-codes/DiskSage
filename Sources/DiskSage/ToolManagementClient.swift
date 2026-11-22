@@ -30,6 +30,14 @@ extension ToolManagementClient: DependencyKey {
                 }
             }
             return try await Task.detached(priority: .utility) {
+                if name == "explain_path" {
+                    guard let path = args["path"]?.string else {
+                        throw FeatureFailure(message: "A path string is required.")
+                    }
+                    let activity = try CleanupActivity.capture()
+                    let diagnostic = PathDiagnostics.explain(path, activity: activity)
+                    return try ToolValue.encode(diagnostic)
+                }
                 if name == "get_history" {
                     let values = try CleanupLogger.shared.recentCleanups(limit: 100).map { item -> ToolValue in
                         var value = try ToolValue.encode(item).object!

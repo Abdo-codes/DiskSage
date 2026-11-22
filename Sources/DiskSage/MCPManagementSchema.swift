@@ -73,6 +73,8 @@ enum MCPManagementSchema {
             properties: ["window": choice(["dashboard", "review", "worktrees", "settings", "schedules", "history", "logs", "agent", "tools", "mcp", "general", "about", "onboarding"])], required: ["window"], requestID: true),
          Definition(name: "reveal_candidate", description: "Reveal one current scanned candidate in Finder; arbitrary paths are not accepted.",
             properties: ["candidate_id": uuid], required: ["candidate_id"], requestID: true),
+         Definition(name: "explain_path", description: "Read-only diagnostic explaining whether DiskSage would offer a local path for cleanup or which safety rule skips it. Returns a job; poll get_job.",
+            properties: ["path": text], required: ["path"], readOnly: true, requestID: true),
          Definition(name: "quit_app", description: "Request DiskSage to quit. Refused while deletion is running. MCP becomes unavailable until the app is reopened; stopping the app stops schedule checks.", requestID: true)] + MCPWorktreeSchema.definitions
     }
 

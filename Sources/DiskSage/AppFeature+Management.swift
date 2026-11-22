@@ -28,7 +28,7 @@ extension AppFeature {
                 guard state.managedRequests[id] == request else { throw FeatureFailure(message: "request_id belongs to a different request.") }
                 state.agentToolReply = AgentToolReply(job: job); return .none
             }
-            guard !["get_history", "get_logs", "list_models"].contains(name) ||
+            guard !["get_history", "get_logs", "list_models", "explain_path"].contains(name) ||
                     state.agentToolJobs.values.filter({ $0.phase == .loading }).count < 4 else {
                 throw FeatureFailure(message: "Too many pending tool reads. Poll existing jobs before retrying.")
             }
@@ -44,7 +44,7 @@ extension AppFeature {
                     details: ToolSettings.details(patch), settings: management.settings().filter { patch[$0.key] != nil })
             case "request_advice": effect = try requestManagedAdvice(state: &state, request: request, approved: false)
             case "delete_candidates": effect = try requestManagedDeletion(state: &state, request: request)
-            case "get_history", "get_logs", "list_models":
+            case "get_history", "get_logs", "list_models", "explain_path":
                 effect = .run { [management] send in
                     let result: Result<ToolValue, FeatureFailure>
                     do { result = .success(try await management.read(name, args)) }

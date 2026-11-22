@@ -14,8 +14,14 @@ enum DiskSageCLI {
         var limit: Int?
     }
 
+    struct ExplainOptions: Equatable, Sendable {
+        var path: String
+        var json = false
+    }
+
     enum Command: Equatable, Sendable {
         case scan(ScanOptions)
+        case explain(ExplainOptions)
         case help
         case version
         case usageError(String)
@@ -70,6 +76,7 @@ enum DiskSageCLI {
       DiskSage                             Launch the menu-bar app
       DiskSage --mcp                       Run the stdio MCP bridge to the running app
       DiskSage scan [options]              Run a read-only scan and print results
+      DiskSage explain <path> [--json]     Explain why a path is offered or skipped
       DiskSage --help | -h                 Show this help message
       DiskSage --version | -v              Show version information
 
@@ -95,6 +102,8 @@ enum DiskSageCLI {
             return .version
         case "scan":
             return parseScan(Array(arguments.dropFirst()))
+        case "explain":
+            return parseExplain(Array(arguments.dropFirst()))
         default:
             // Leave empty launches and macOS LaunchServices/AppKit arguments (-psn_*, -NS*, etc.) to the GUI.
             return nil
@@ -159,6 +168,31 @@ enum DiskSageCLI {
         return .scan(options)
     }
 
+    private static func parseExplain(_ args: [String]) -> Command {
+        var path: String?
+        var json = false
+        for arg in args {
+            switch arg {
+            case "--help", "-h":
+                return .help
+            case "--json":
+                json = true
+            default:
+                if arg.hasPrefix("-") {
+                    return error("Unknown explain argument '\(arg)'.")
+                }
+                guard path == nil else {
+                    return error("Unexpected extra path argument '\(arg)'.")
+                }
+                path = arg
+            }
+        }
+        guard let path else {
+            return error("Missing path for explain. Example: DiskSage explain ~/Developer/app/node_modules")
+        }
+        return .explain(ExplainOptions(path: path, json: json))
+    }
+
     private static func error(_ message: String) -> Command {
         .usageError("Error: \(message)\n\n\(usageText)\n")
     }
@@ -166,6 +200,10 @@ enum DiskSageCLI {
     static func run(
         _ command: Command,
         scan: @Sendable () async throws -> ScanReport = { try await DiskScanner().report() },
+        explain: @Sendable (String) async throws -> PathDiagnostic = { path in
+            let activity = try CleanupActivity.capture()
+            return PathDiagnostics.explain(path, activity: activity)
+        },
         freeSpace: @Sendable () -> Int64? = { try? DiskUsageSnapshot.read().availableBytes },
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         now: Date = Date(),
@@ -178,6 +216,24 @@ enum DiskSageCLI {
             return Result(exitCode: 0, stdout: "DiskSage \(version)\n", stderr: "")
         case let .usageError(message):
             return Result(exitCode: 2, stdout: "", stderr: message)
+        case let .explain(options):
+            let diagnostic: PathDiagnostic
+            do {
+                diagnostic = try await explain(options.path)
+            } catch {
+                return Result(exitCode: 1, stdout: "", stderr: "Explain failed: \(error.localizedDescription)\n")
+            }
+            if options.json {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                do {
+                    let data = try encoder.encode(diagnostic)
+                    return Result(exitCode: 0, stdout: String(decoding: data, as: UTF8.self) + "\n", stderr: "")
+                } catch {
+                    return Result(exitCode: 1, stdout: "", stderr: "Failed to encode JSON: \(error.localizedDescription)\n")
+                }
+            }
+            return Result(exitCode: 0, stdout: formatDiagnostic(diagnostic, home: home), stderr: "")
         case let .scan(options):
             let report: ScanReport
             do {
@@ -319,6 +375,26 @@ enum DiskSageCLI {
             : "Showing \(displayed.count) of \(matched.count) candidate(s)"
         lines.append("")
         lines.append("\(countSummary) · \(totalBytes.diskSize) reclaimable (estimate)\(freeSuffix)")
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private static func formatDiagnostic(_ diagnostic: PathDiagnostic, home: URL) -> String {
+        let homePrefix = CleanupPath.fileURL(home).path + "/"
+        let displayPath = diagnostic.path.hasPrefix(homePrefix)
+            ? "~/" + diagnostic.path.dropFirst(homePrefix.count)
+            : diagnostic.path
+        var lines = [
+            "Path:     \(displayPath)",
+            "Verdict:  \(diagnostic.verdict.title)",
+            "Matcher:  \(diagnostic.matcher)",
+        ]
+        if let risk = diagnostic.risk { lines.append("Risk:     \(risk)") }
+        if let size = diagnostic.sizeBytes { lines.append("Size:     \(size.diskSize)") }
+        lines.append("Summary:  \(diagnostic.summary)")
+        if !diagnostic.reasons.isEmpty {
+            lines.append("Reasons:")
+            for reason in diagnostic.reasons { lines.append("  - \(reason)") }
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 

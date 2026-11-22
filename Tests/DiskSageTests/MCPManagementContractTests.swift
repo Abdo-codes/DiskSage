@@ -8,7 +8,7 @@ struct MCPManagementContractTests {
             "set_selection", "delete_candidates", "cancel_operation", "dismiss_confirmation", "list_schedules",
             "create_schedule", "update_schedule", "pause_schedule", "remove_schedule", "get_settings", "update_settings",
             "list_advisors", "list_models", "request_advice", "get_history", "get_logs", "get_mcp_setup", "open_window",
-            "reveal_candidate", "quit_app", "refresh_worktrees", "list_worktrees", "inspect_worktree",
+            "reveal_candidate", "explain_path", "quit_app", "refresh_worktrees", "list_worktrees", "inspect_worktree",
             "preview_worktree_removal", "preview_unused_worktrees", "remove_worktrees", "set_worktree_protected"]
         #expect(Set(MCPServer.tools.compactMap { $0["name"] as? String }) == expected)
         #expect(MCPServer.tools.count == expected.count)
