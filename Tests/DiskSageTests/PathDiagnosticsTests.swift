@@ -91,4 +91,47 @@ struct PathDiagnosticsTests {
         #expect(missingMarker.verdict == .skipped)
         #expect(missingMarker.reasons.contains { $0.contains("markers") })
     }
+
+    @Test func generatedBuildPathsBypassProjectCacheSkipListAndFallbackFromRecentWholeFolders() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        // `.build` is in ProjectCacheRules.default.skip, so explain must fall through to GeneratedCleanupScope.
+        try f.write("Developer/swift-app/.build/debug/App.o", bytes: 8_192)
+        let dotBuild = CleanupPath.fileURL(f.base.appending(path: "Developer/swift-app/.build"))
+        let dotBuildDiag = PathDiagnostics.explain(dotBuild.path, activity: .idle, now: f.later(hours: 2), home: f.base)
+        #expect(dotBuildDiag.verdict == .eligible)
+        #expect(dotBuildDiag.matcher == "Generated files")
+
+        // DerivedData inside ~/Developer/app is a `.derivedData` temporary build (too recent at 2h for whole-folder),
+        // so explain must fall through to generated-file eligibility just like TemporaryBuildInspector.scan.
+        try f.write("Developer/ios-app/DerivedData/Build/Intermediates.noindex/Main.o", bytes: 8_192)
+        let derived = CleanupPath.fileURL(f.base.appending(path: "Developer/ios-app/DerivedData"))
+        let derivedDiag = PathDiagnostics.explain(derived.path, activity: .idle, now: f.later(hours: 2), home: f.base)
+        #expect(derivedDiag.verdict == .eligible)
+        #expect(derivedDiag.matcher == "Generated files")
+    }
+
+    @Test func liveClaudeSessionBlocksScratchpadEvenWhenScratchpadItselfIsOld() throws {
+        let project = TemporaryBuildOutput.claudeRoot.appending(path: "disksage-diag-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: project) }
+        let session = project.appending(path: "session-1", directoryHint: .isDirectory)
+        let scratchpad = session.appending(path: "scratchpad", directoryHint: .isDirectory)
+        let tasks = session.appending(path: "tasks", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: scratchpad, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tasks, withIntermediateDirectories: true)
+
+        let oldFile = scratchpad.appending(path: "notes.txt")
+        try Data(repeating: 1, count: 4_096).write(to: oldFile)
+        let liveFile = tasks.appending(path: "active.log")
+        try Data("active".utf8).write(to: liveFile)
+
+        // Advance `now` by 10 days so scratchpad alone passes TemporaryBuildInspector.inspect,
+        // while an active process holds a sibling file inside the same Claude session.
+        let tenDaysLater = Date().addingTimeInterval(10 * 24 * 3_600)
+        let activeSession = CleanupActivity(paths: [CleanupPath.fileURL(liveFile).path])
+        #expect(TemporaryBuildInspector.inspect(scratchpad, activity: activeSession, now: tenDaysLater) != nil)
+
+        let diag = PathDiagnostics.explain(scratchpad.path, activity: activeSession, now: tenDaysLater)
+        #expect(diag.verdict == .skipped)
+        #expect(diag.matcher == "Claude session guard")
+    }
 }

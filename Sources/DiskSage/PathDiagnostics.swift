@@ -86,8 +86,21 @@ enum PathDiagnostics {
         if let set = SimulatorInventory.deviceSet(for: url, home: canonicalHome) {
             return explainSimulator(url, set: set, activity: activity, keep: keep, run: simctl)
         }
+        if let session = ClaudeSessionActivity.session(containing: url),
+           ClaudeSessionActivity.isLive(session, activity: activity, now: now) {
+            return skipped(url, matcher: "Claude session guard",
+                           reasons: ["A live Claude session still uses this folder."])
+        }
         if TemporaryBuildOutput.kind(of: url, home: canonicalHome) != nil {
-            return explainTemporaryBuild(url, activity: activity, now: now, home: canonicalHome)
+            let temp = explainTemporaryBuild(url, activity: activity, now: now, home: canonicalHome)
+            if temp.verdict == .eligible { return temp }
+            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
+                let generated = explainGenerated(url, rule: genRule, activity: activity, now: now,
+                                                 home: canonicalHome, keep: keep)
+                if generated.verdict == .eligible { return generated }
+                return skipped(url, matcher: temp.matcher, reasons: temp.reasons + generated.reasons)
+            }
+            return temp
         }
         let activeRules = rules ?? ProjectCacheRulesLoader.current(home: canonicalHome)
         if let project = explainProjectCache(url, activity: activity, now: now, home: canonicalHome,
@@ -96,7 +109,8 @@ enum PathDiagnostics {
             return project
         }
         if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
-            return explainGenerated(url, rule: genRule, activity: activity)
+            return explainGenerated(url, rule: genRule, activity: activity, now: now,
+                                    home: canonicalHome, keep: keep)
         }
         return PathDiagnostic(path: url.path, verdict: .outsideScope, matcher: "Allowlist",
                               risk: nil, sizeBytes: nil, summary: "Outside DiskSage's allowlisted cleanup locations.",
@@ -263,6 +277,8 @@ enum PathDiagnostics {
         guard let matchingRoot = roots.first(where: { url.path.hasPrefix($0.path + "/") }) else { return nil }
         let relFromRoot = String(url.path.dropFirst(matchingRoot.path.count + 1))
         if let skippedPart = relFromRoot.split(separator: "/").map(String.init).first(where: { rules.skip.contains($0) }) {
+            // Built-in build folders (.build, DerivedData) are skipped here so GeneratedCleanupScope handles them.
+            if GeneratedCleanupScope.rule(for: url, home: home) != nil { return nil }
             return skipped(url, matcher: "Project cache rules", reasons: ["'\(skippedPart)' is in the project-cache skip list."])
         }
         guard let hit = rules.matchDirectory(url, under: matchingRoot) else {
@@ -320,13 +336,17 @@ enum PathDiagnostics {
                               reasons: [])
     }
 
-    private static func explainGenerated(_ url: URL, rule: GeneratedCleanupRule, activity: CleanupActivity) -> PathDiagnostic {
+    private static func explainGenerated(_ url: URL, rule: GeneratedCleanupRule, activity: CleanupActivity,
+                                         now: Date, home: URL, keep: KeepRules) -> PathDiagnostic {
         if activity.contains(url, rule: rule) {
             return skipped(url, matcher: "Generated files", reasons: ["Folder or toolchain is currently in use."])
         }
         do {
+            let cutoff = now.addingTimeInterval(-GeneratedCleanupPolicy.minimumAge)
+            let policy = SafetyPolicy(home: home, now: now, keep: keep)
             if let candidate = try GeneratedFileDeleter.inspect(url, name: url.lastPathComponent, category: .build,
-                                                                rule: rule, activity: activity, handsOffWholeFolders: false) {
+                                                                rule: rule, activity: activity, cutoff: cutoff,
+                                                                policy: policy, handsOffWholeFolders: false) {
                 return PathDiagnostic(path: url.path, verdict: .eligible, matcher: "Generated files",
                                       risk: riskKey(candidate.risk), sizeBytes: candidate.size, summary: candidate.reason, reasons: [])
             }
