@@ -3,11 +3,13 @@ import Foundation
 /// No shell, inherited Git state, credential prompts, lazy fetch or executable repository helpers.
 struct WorktreeGitProcess: Sendable {
     struct Output { var data: Data; var code: Int32; var text: String { String(decoding: data, as: UTF8.self) } }
-    func run(_ path: String, _ arguments: [String], allowed: Set<Int32> = [0]) throws -> Output {
+    func run(_ path: String, _ arguments: [String], allowed: Set<Int32> = [0],
+             environment: [String: String] = [:], input: Data? = nil) throws -> Output {
         let output = try execute("/usr/bin/git", ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false",
             "-c", "core.untrackedCache=false", "-c", "core.attributesFile=/dev/null",
             "-c", "diff.external=", "-C", path] + arguments,
-            allowTermination: !arguments.starts(with: ["worktree", "remove"]))
+            allowTermination: !arguments.starts(with: ["worktree", "remove"]),
+            environment: environment, input: input)
         guard allowed.contains(output.code) else {
             throw FeatureFailure(message: "Git refused \(arguments.first ?? "inspection"): \(output.text.prefix(700))")
         }
@@ -34,8 +36,14 @@ struct WorktreeGitProcess: Sendable {
     /// The output stays in memory, so a full disk cannot break a check. `outputLimit` is the largest accepted output.
     func execute(_ executable: String, _ args: [String], allowTermination: Bool = true, timeout: TimeInterval = 20,
                  environment: [String: String] = [:], outputLimit: Int = 8_000_000,
-                 workingDirectory: URL? = nil) throws -> Output {
+                 workingDirectory: URL? = nil, input: Data? = nil) throws -> Output {
         let pipe = Pipe()
+        let stdinPipe = input != nil ? Pipe() : nil
+        defer {
+            try? pipe.fileHandleForWriting.close()
+            try? stdinPipe?.fileHandleForReading.close()
+            try? stdinPipe?.fileHandleForWriting.close()
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
@@ -46,9 +54,14 @@ struct WorktreeGitProcess: Sendable {
             .merging(environment) { _, added in added }
         process.standardOutput = pipe
         process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = stdinPipe ?? FileHandle.nullDevice
         try process.run()
         try? pipe.fileHandleForWriting.close()
+        if let stdinPipe, let input {
+            try? stdinPipe.fileHandleForReading.close()
+            try? stdinPipe.fileHandleForWriting.write(contentsOf: input)
+            try? stdinPipe.fileHandleForWriting.close()
+        }
         let buffer = ProcessOutputBuffer()
         let reader = pipe.fileHandleForReading
         // Close the read end on each path. Without this, each run kept one descriptor open until the app had none left.

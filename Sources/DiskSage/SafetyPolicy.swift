@@ -58,6 +58,22 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
+        if candidate.deletionMode == .projectCache {
+            // Git-ignored project caches. ProjectCacheInventory re-checks Git ignore, tracked files,
+            // quiet period, refuse_inside, and process activity right before deletion.
+            guard candidate.identity != FileIdentity(device: 0, inode: 0),
+                  ProjectCacheInventory.isAllowedScope(url, home: home) else {
+                throw SafetyPolicyError.refused("A project cache candidate must match a known project cache rule.")
+            }
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+                throw SafetyPolicyError.refused("Symlinked targets are not allowed.")
+            }
+            try rejectSymlinkedAncestors(of: url)
+            try verifyIdentity(of: url, expected: candidate.identity)
+            do { try WorktreePathGuard.rejectSourceContainers(url) }
+            catch { throw SafetyPolicyError.refused(error.localizedDescription) }
+            return
+        }
         if candidate.deletionMode == .simulatorDevice {
             // simctl removes the folder. SimulatorInventory checks the state and activity again before deletion.
             guard url.deletingLastPathComponent() == SimulatorInventory.devicesRoot(home: home),
