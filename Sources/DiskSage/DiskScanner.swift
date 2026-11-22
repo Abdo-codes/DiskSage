@@ -119,7 +119,9 @@ struct DiskScanner: Sendable {
                 WholeFolderBranch(index: 1, candidates: ProjectCacheInventory.candidates(activity: activity, home: home))
             }
             group.addTask {
-                WholeFolderBranch(index: 2, candidates: SimulatorInventory.candidates(activity: activity, home: home))
+                WholeFolderBranch(index: 2, candidates:
+                    SimulatorInventory.candidates(activity: activity, home: home) +
+                    SimulatorRuntimeInventory.candidates(activity: activity, home: home))
             }
             group.addTask {
                 WholeFolderBranch(index: 3, candidates: ToolCacheInventory.candidates(activity: activity, home: home))

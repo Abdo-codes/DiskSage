@@ -51,6 +51,8 @@ struct CleanupService: Sendable {
                  return try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
              } else if candidate.deletionMode == .simulatorDevice {
                  try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
+             } else if candidate.deletionMode == .simulatorRuntime {
+                 try SimulatorRuntimeInventory.delete(candidate, activity: try CleanupActivity.capture())
              } else if candidate.deletionMode == .toolCommand {
                  return try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture())
              } else if candidate.deletionMode == .projectCache {
