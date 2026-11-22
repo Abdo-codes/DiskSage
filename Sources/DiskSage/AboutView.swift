@@ -3,7 +3,7 @@ import SwiftUI
 
 struct AboutView: View {
     var information = AppInformation()
-    var icon = NSImage(named: NSImage.applicationIconName) ?? NSImage()
+    var icon = BrandMark.applicationIcon()
 
     var body: some View {
         Form {
@@ -34,12 +34,10 @@ private struct AboutIdentity: View {
     let icon: NSImage
     var body: some View {
         HStack(spacing: 16) {
-            Image(nsImage: icon)
-                .resizable().interpolation(.high).frame(width: 64, height: 64)
-                .accessibilityHidden(true)
+            BrandIconBadge(size: 72, icon: icon)
             VStack(alignment: .leading, spacing: 4) {
                 Text("DiskSage").font(.title.weight(.semibold))
-                Text("Developer disk cleanup for macOS").foregroundStyle(.secondary)
+                Text("Safe developer disk cleanup for macOS").foregroundStyle(.secondary)
                 Text("Version \(information.displayVersion)").font(.caption).foregroundStyle(.secondary)
             }
         }

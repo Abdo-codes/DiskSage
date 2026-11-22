@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="ds-ring" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D9EBE2"/>
+      <stop offset="100%" stop-color="#8EB4A3"/>
+    </linearGradient>
+    <linearGradient id="ds-leaf" x1="20" y1="44" x2="44" y2="18" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E7A55"/>
+      <stop offset="100%" stop-color="#52E5A8"/>
+    </linearGradient>
+    <mask id="ds-vein">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M25.6 38.4 L37.0 27.0" stroke="#000" stroke-width="3.4" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <!-- Open storage gauge ring echoing DiskSage's inlaid dial -->
+  <path d="M35.6 6.3 A25.9 25.9 0 1 0 57.5 27.5" stroke="url(#ds-ring)" stroke-width="5.8" stroke-linecap="round"/>
+  <!-- Active capacity indicator dot at 46 degrees -->
+  <circle cx="50.0" cy="13.4" r="3.5" fill="#52E5A8"/>
+  <!-- Sculpted sage leaf with negative-space midrib -->
+  <path d="M22.0 42.0 C19.6 29.5 29.5 20.3 43.4 20.6 C43.7 34.5 34.5 44.4 22.0 42.0 Z" fill="url(#ds-leaf)" mask="url(#ds-vein)"/>
+  <!-- Stem -->
+  <path d="M22.8 41.2 L19.2 44.8" stroke="#34B883" stroke-width="4.2" stroke-linecap="round"/>
+</svg>

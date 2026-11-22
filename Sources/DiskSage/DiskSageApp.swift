@@ -79,8 +79,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
             openHistory: { [weak self] in self?.showHistory() })
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "externaldrive.badge.checkmark", accessibilityDescription: "DiskSage")
-            button.image?.isTemplate = true
+            button.image = BrandMark.menuBarIcon()
             button.toolTip = "DiskSage — developer storage"
             button.setAccessibilityLabel("DiskSage")
             button.target = self
