@@ -98,4 +98,39 @@ struct EcosystemCacheTests {
         let afterLink = EcosystemCacheInventory.candidates(activity: .idle, now: later, home: f.base, minimumBytes: 1)
         #expect(afterLink.map(\.url) == [gradle])
     }
+
+    @Test func offersCocoaPodsAtLowRiskAndPlaywrightPuppeteerAsReviewItems() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        try f.write("Library/Caches/CocoaPods/Pods/Release/Alamofire/file.a", bytes: 8_192)
+        try f.write("Library/Caches/ms-playwright/chromium-1148/chrome", bytes: 16_384)
+        try f.write(".cache/puppeteer/chrome/mac_arm-131/chrome", bytes: 16_384)
+
+        let later = f.later(hours: 2)
+        let found = EcosystemCacheInventory.candidates(activity: .idle, now: later, home: f.base, minimumBytes: 1)
+        let byName = Dictionary(uniqueKeysWithValues: found.map { ($0.name, $0) })
+        let pods = try #require(byName["CocoaPods cache"])
+        let playwright = try #require(byName["Playwright browsers"])
+        let puppeteer = try #require(byName["Puppeteer browsers"])
+
+        #expect(pods.risk == .low)
+        #expect(playwright.risk == .medium)
+        #expect(puppeteer.risk == .medium)
+        #expect(found.allSatisfy { $0.deletionMode == .contents && $0.category == .cache })
+
+        // Active browser executable inside ms-playwright blocks Playwright at scan and pre-deletion.
+        let browserOpen = CleanupActivity(paths: [CleanupPath.fileURL(f.base.appending(path: "Library/Caches/ms-playwright/chromium-1148/chrome")).path])
+        let whileRunning = EcosystemCacheInventory.candidates(activity: browserOpen, now: later, home: f.base, minimumBytes: 1)
+        #expect(!whileRunning.contains { $0.name == "Playwright browsers" })
+        #expect(throws: (any Error).self) {
+            try EcosystemCacheInventory.verifyBeforeDeletion(playwright, activity: browserOpen, now: later, home: f.base)
+        }
+
+        for candidate in [pods, playwright, puppeteer] {
+            try SafetyPolicy(home: f.base, now: later).validate(candidate)
+            try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: .idle, now: later, home: f.base)
+            try SecureFileDeleter.delete(candidate, entryRemoved: {})
+            #expect(f.exists(candidate.url))
+            #expect(try FileManager.default.contentsOfDirectory(atPath: candidate.url.path).isEmpty)
+        }
+    }
 }
