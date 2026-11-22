@@ -18,8 +18,9 @@ enum ProjectCacheInventory {
             home.appending(path: "Developer", directoryHint: .isDirectory),
             home.appending(path: "Documents/Codex", directoryHint: .isDirectory),
         ]
+        let extra = ProjectCacheRulesLoader.extraRoots(home: home)
         let miseRoots = MiseProjectDiscovery.projectRoots(home: home, env: miseEnv)
-        return MiseProjectDiscovery.uniqueSorted(builtIn + miseRoots)
+        return MiseProjectDiscovery.uniqueSorted(builtIn + extra + miseRoots)
     }
 
     /// Synchronous allowlist check used by `SafetyPolicy`: `url` must sit under an allowed root

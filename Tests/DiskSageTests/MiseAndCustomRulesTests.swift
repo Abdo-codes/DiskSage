@@ -174,4 +174,64 @@ struct MiseAndCustomRulesTests {
         #expect(found.map(\.url) == [CleanupPath.fileURL(monorepo.appending(path: "frontend/node_modules"))])
         try ProjectCacheInventory.verifyBeforeDeletion(frontendCache, activity: .idle, now: quietNow, home: f.base)
     }
+
+    @Test func savesAndLoadsExtraProjectRootsPreservingHandEditedFieldsAndRejectingUnsafeRoots() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesFile = f.base.appending(path: ".config/disksage/rules.json")
+        let projects = f.base.appending(path: "Projects/web-app")
+        try initGitProject(at: projects, gitignore: "node_modules/\n")
+        try f.write("Projects/web-app/node_modules/pkg/index.js", bytes: 8_192)
+
+        // Start with hand-edited beside & refuse_inside rules; saving updated quiet_hours + extra_roots preserves them.
+        var config = ProjectCacheRulesLoader.UserConfig(
+            names: [".custom-out"],
+            beside: [".custom-out": ["Makefile"]],
+            refuseInside: [".custom-out": ["keep/*"]],
+            skip: ["archive"],
+            quietHours: 36,
+            extraRoots: ["~/Projects"]
+        )
+        try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+
+        let reread = try ProjectCacheRulesLoader.loadConfig(from: rulesFile)
+        #expect(reread == config)
+        let extra = ProjectCacheRulesLoader.extraRoots(home: f.base, env: ["XDG_CONFIG_HOME": f.base.appending(path: ".config").path])
+        #expect(extra == [CleanupPath.fileURL(f.base.appending(path: "Projects"))])
+
+        // End-to-end scan using ~/Projects via extra_roots in rules.json.
+        let quietNow = f.later(hours: 40)
+        let found = ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1)
+        let candidate = try #require(found.first)
+        #expect(candidate.url == CleanupPath.fileURL(projects.appending(path: "node_modules")))
+        try SafetyPolicy(home: f.base, now: quietNow).validate(candidate)
+        try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: .idle, now: quietNow, home: f.base)
+
+        // Unsafe extra_roots are rejected on save and reported by invalidExtraRoots.
+        let unsafe = ["/", "~", "~/Library", "~/Library/Caches", "/etc", "~/Projects/.git", "relative/dir"]
+        #expect(ProjectCacheRulesLoader.invalidExtraRoots(unsafe, home: f.base) == unsafe)
+        for bad in unsafe {
+            config.extraRoots = [bad]
+            #expect(throws: (any Error).self) {
+                try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+            }
+        }
+
+        // Symlinked extra root is rejected.
+        let external = try f.folder("external")
+        let link = f.base.appending(path: "LinkedProjects")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
+        config.extraRoots = ["~/LinkedProjects"]
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(config, to: rulesFile, home: f.base)
+        }
+
+        // Symlinked rules.json is refused on save.
+        let realTarget = try f.write("elsewhere.json", bytes: 2)
+        let linkRules = f.base.appending(path: "link-rules.json")
+        try FileManager.default.createSymbolicLink(at: linkRules, withDestinationURL: realTarget)
+        config.extraRoots = ["~/Projects"]
+        #expect(throws: (any Error).self) {
+            try ProjectCacheRulesLoader.save(config, to: linkRules, home: f.base)
+        }
+    }
 }

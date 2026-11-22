@@ -1,22 +1,30 @@
 import Darwin
 import Foundation
 
-/// Loads optional user-defined project cache rules from `$XDG_CONFIG_HOME/disksage/rules.json`
+/// Loads and saves optional user-defined project cache rules from `$XDG_CONFIG_HOME/disksage/rules.json`
 /// (or `~/.config/disksage/rules.json`) and merges them with `ProjectCacheRules.default`.
-/// Custom rules can add names/markers/skip entries and adjust quiet hours (>= 1h), but can never
-/// disable Git-ignore, tracked-file, nested-Git, `KeepRules`, or running-process checks.
+/// Custom rules can add names/markers/skip entries, add extra project roots under `$HOME`, and
+/// adjust quiet hours (>= 1h), but can never disable Git-ignore, tracked-file, nested-Git,
+/// `KeepRules`, or running-process checks.
 enum ProjectCacheRulesLoader {
-    private struct FileDocument: Decodable {
+    struct UserConfig: Codable, Equatable, Sendable {
         var names: [String]?
         var beside: [String: [String]]?
         var refuseInside: [String: [String]]?
         var skip: [String]?
         var quietHours: Double?
+        var extraRoots: [String]?
 
         enum CodingKeys: String, CodingKey {
             case names, beside, skip
             case refuseInside = "refuse_inside"
             case quietHours = "quiet_hours"
+            case extraRoots = "extra_roots"
+        }
+
+        var isEmpty: Bool {
+            (names ?? []).isEmpty && (beside ?? [:]).isEmpty && (refuseInside ?? [:]).isEmpty
+                && (skip ?? []).isEmpty && quietHours == nil && (extraRoots ?? []).isEmpty
         }
     }
 
@@ -24,26 +32,39 @@ enum ProjectCacheRulesLoader {
     static let minimumQuietHours: Double = 1
 
     static func configURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                          env: [String: String] = ProcessInfo.processInfo.environment) -> URL {
-        if let xdg = env["XDG_CONFIG_HOME"], !xdg.isEmpty {
+                          env: [String: String]? = nil) -> URL {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let effectiveEnv = env ?? (canonicalHome == CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
+            ? ProcessInfo.processInfo.environment : [:])
+        if let xdg = effectiveEnv["XDG_CONFIG_HOME"], !xdg.isEmpty {
             return CleanupPath.fileURL(URL(fileURLWithPath: xdg, isDirectory: true))
                 .appending(path: "disksage/rules.json")
         }
-        return CleanupPath.fileURL(home).appending(path: ".config/disksage/rules.json")
+        return canonicalHome.appending(path: ".config/disksage/rules.json")
     }
 
     /// Returns merged rules for scanning/validation, falling back safely to `.default` if missing or invalid.
     static func current(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                        env: [String: String] = ProcessInfo.processInfo.environment) -> ProjectCacheRules {
+                        env: [String: String]? = nil) -> ProjectCacheRules {
         let url = configURL(home: home, env: env)
-        return (try? load(from: url)) ?? .default
+        return (try? load(from: url, home: home)) ?? .default
     }
 
-    /// Loads and validates a user rules JSON file, returning `.default` if the file does not exist.
-    static func load(from url: URL) throws -> ProjectCacheRules {
+    /// Returns validated, existing extra project roots from `rules.json`, or `[]` if missing/invalid.
+    static func extraRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                           env: [String: String]? = nil) -> [URL] {
+        let url = configURL(home: home, env: env)
+        guard let config = try? loadConfig(from: url),
+              let roots = try? validatedExtraRoots(config.extraRoots ?? [], home: home) else { return [] }
+        return roots.filter { TemporaryBuildOutput.isRealDirectory($0) }
+    }
+
+    /// Reads the raw user configuration document, returning an empty `UserConfig` when absent.
+    static func loadConfig(from url: URL) throws -> UserConfig {
+        try rejectSymlinkedAncestors(of: url)
         var info = stat()
         if lstat(url.path, &info) != 0 {
-            if errno == ENOENT { return .default }
+            if errno == ENOENT { return UserConfig() }
             throw FeatureFailure(message: "Could not read custom rules at \(url.path).")
         }
         guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid(),
@@ -51,11 +72,125 @@ enum ProjectCacheRulesLoader {
             throw FeatureFailure(message: "Custom rules file must be a regular user-owned file under 1 MiB.")
         }
         let data = try Data(contentsOf: url)
-        let doc = try JSONDecoder().decode(FileDocument.self, from: data)
+        return try JSONDecoder().decode(UserConfig.self, from: data)
+    }
+
+    /// Loads and validates a user rules JSON file, returning `.default` if the file does not exist.
+    static func load(from url: URL,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> ProjectCacheRules {
+        let doc = try loadConfig(from: url)
+        if let extra = doc.extraRoots {
+            _ = try validatedExtraRoots(extra, home: home)
+        }
         return try merge(base: .default, document: doc)
     }
 
-    private static func merge(base: ProjectCacheRules, document: FileDocument) throws -> ProjectCacheRules {
+    /// Validates and atomically writes `config` to `url` with `0o600` permissions, refusing symlinks.
+    static func save(_ config: UserConfig, to url: URL = configURL(),
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        _ = try merge(base: .default, document: config)
+        _ = try validatedExtraRoots(config.extraRoots ?? [], home: home)
+        try rejectSymlinkedAncestors(of: url)
+
+        var existing = stat()
+        if lstat(url.path, &existing) == 0 {
+            guard (existing.st_mode & S_IFMT) == S_IFREG, existing.st_uid == getuid() else {
+                throw FeatureFailure(message: "Refused to overwrite non-regular or non-user-owned rules file.")
+            }
+        } else if errno != ENOENT {
+            throw FeatureFailure(message: "Could not inspect custom rules path.")
+        }
+
+        let parent = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try rejectSymlinkedAncestors(of: url)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(config) + Data("\n".utf8)
+        let temp = parent.appending(path: ".rules-\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(atPath: temp.path, contents: data,
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw FeatureFailure(message: "Could not write temporary custom rules file.")
+        }
+        if Darwin.rename(temp.path, url.path) != 0 {
+            let code = errno
+            try? FileManager.default.removeItem(at: temp)
+            throw FeatureFailure(message: "Could not save custom rules: \(String(cString: strerror(code))).")
+        }
+    }
+
+    static func invalidExtraRoots(_ entries: [String],
+                                  home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+        entries.filter { validatedExtraRoot($0, home: home) == nil }
+    }
+
+    static func validatedExtraRoots(_ entries: [String],
+                                    home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> [URL] {
+        var resolved: [URL] = []
+        for entry in entries {
+            guard let url = validatedExtraRoot(entry, home: home) else {
+                throw FeatureFailure(message: "Extra project root must be a non-symlinked folder under ~ (not ~/Library): \(entry)")
+            }
+            resolved.append(url)
+        }
+        return MiseProjectDiscovery.uniqueSorted(resolved)
+    }
+
+    static func isValidSkipName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.contains("\\") && name != "." && name != ".."
+    }
+
+    private static func validatedExtraRoot(_ raw: String, home: URL) -> URL? {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let expanded = trimmed.hasPrefix("~/") ? canonicalHome.path + trimmed.dropFirst(1) : trimmed
+        guard expanded.hasPrefix("/") else { return nil }
+
+        let standardizedPath = normalizeSystemPrefix(URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL.path)
+        let standardized = URL(fileURLWithPath: standardizedPath, isDirectory: true)
+        guard standardized.path.hasPrefix(canonicalHome.path + "/"),
+              !standardized.pathComponents.contains(".git") else { return nil }
+
+        let library = canonicalHome.appending(path: "Library", directoryHint: .isDirectory).path
+            .precomposedStringWithCanonicalMapping.lowercased()
+        let loweredPath = standardized.path.precomposedStringWithCanonicalMapping.lowercased()
+        guard loweredPath != library, !loweredPath.hasPrefix(library + "/") else { return nil }
+
+        guard (try? rejectSymlinkedAncestors(of: standardized)) != nil else { return nil }
+        var info = stat()
+        if lstat(standardized.path, &info) == 0 {
+            guard (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        }
+        return CleanupPath.fileURL(standardized)
+    }
+
+    private static func normalizeSystemPrefix(_ path: String) -> String {
+        for prefix in ["/var", "/tmp", "/etc"] where path == prefix || path.hasPrefix(prefix + "/") {
+            return "/private" + path
+        }
+        return path
+    }
+
+    private static func rejectSymlinkedAncestors(of url: URL) throws {
+        let normalized = URL(fileURLWithPath: normalizeSystemPrefix(url.standardizedFileURL.path))
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in normalized.pathComponents.dropFirst() {
+            current.append(path: component)
+            var info = stat()
+            guard lstat(current.path, &info) == 0 else {
+                if errno == ENOENT { return }
+                throw FeatureFailure(message: "Unable to verify path component \(current.path).")
+            }
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                throw FeatureFailure(message: "Symlinked path components are not allowed: \(current.path)")
+            }
+        }
+    }
+
+    private static func merge(base: ProjectCacheRules, document: UserConfig) throws -> ProjectCacheRules {
         var merged = base
 
         if let names = document.names {
@@ -95,7 +230,7 @@ enum ProjectCacheRulesLoader {
 
         if let skip = document.skip {
             for name in skip {
-                guard !name.isEmpty, !name.contains("/"), !name.contains("\\"), name != ".", name != ".." else {
+                guard isValidSkipName(name) else {
                     throw FeatureFailure(message: "Invalid skip directory name: \(name)")
                 }
                 merged.skip.insert(name)
