@@ -11,20 +11,38 @@ struct DiskScanner: Sendable {
         let deletionMode: DeletionMode
     }
 
+    private struct WholeFolderBranch: Sendable {
+        let index: Int
+        var candidates: [CleanupCandidate] = []
+        var generatedRoots: [URL] = []
+        var warnings: [String] = []
+    }
+
+    private struct SeedResult: Sendable {
+        let index: Int
+        let candidate: CleanupCandidate?
+        let warning: String?
+    }
+
     private let locations: [Location]?
     private let activity: @Sendable () throws -> CleanupActivity
     private let inventoryLimit: Int
+    private let maxConcurrency: Int
     init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() },
-         inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries) {
-        self.locations = locations; self.activity = activity; self.inventoryLimit = inventoryLimit
+         inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries, maxConcurrency: Int = 4) {
+        self.locations = locations
+        self.activity = activity
+        self.inventoryLimit = inventoryLimit
+        self.maxConcurrency = min(4, max(1, maxConcurrency))
     }
 
     func scan() async throws -> [CleanupCandidate] { try await report().candidates }
 
     /// Throws when the activity check fails. An empty result means that the scan ran and found nothing.
     func report() async throws -> ScanReport {
-        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit] in
-            try Self.scanSynchronously(locations: locations, activity: activity, inventoryLimit: inventoryLimit)
+        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit, maxConcurrency] in
+            try await Self.scanConcurrently(locations: locations, activity: activity,
+                                            inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency)
         }
         return try await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
@@ -39,8 +57,8 @@ struct DiskScanner: Sendable {
         } onCancel: { task.cancel() }
     }
 
-    private static func scanSynchronously(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity,
-                                          inventoryLimit: Int) throws -> ScanReport {
+    private static func scanConcurrently(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity,
+                                         inventoryLimit: Int, maxConcurrency: Int) async throws -> ScanReport {
         guard !Task.isCancelled else { return ScanReport(candidates: []) }
         // A failed/incomplete activity check never turns into permission to delete. It is an error, not an empty disk.
         let currentActivity: CleanupActivity
@@ -51,47 +69,129 @@ struct DiskScanner: Sendable {
         var seeds = locations ?? defaultLocations(home: home)
         var wholeFolders: [CleanupCandidate] = [], warnings: [String] = []
         if locations == nil {
-            let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { root in
-                let result = GeneratedBuildDiscovery().discover(under: root)
-                if result.limitReached { warnings.append(discoveryWarning(root, home: home)) }
-                return result.directories
-            }
-            let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: currentActivity, home: home)
-            let projectCaches = ProjectCacheInventory.candidates(activity: currentActivity, home: home)
-            wholeFolders = temporary.candidates + projectCaches +
-                SimulatorInventory.candidates(activity: currentActivity, home: home) +
-                ToolCacheInventory.candidates(activity: currentActivity, home: home) +
-                EcosystemCacheInventory.candidates(activity: currentActivity, home: home)
-            seeds += temporary.generatedRoots.map {
-                Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
-                    category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
-            }
-        }
-        var seen = Set<String>()
-        let candidates = seeds.compactMap { seed -> CleanupCandidate? in
-            let url = CleanupPath.fileURL(seed.url)
-            guard !Task.isCancelled, seen.insert(url.path).inserted else { return nil }
-            if seed.deletionMode == .generatedFiles {
-                guard let rule = GeneratedCleanupScope.rule(for: url, home: home) else { return nil }
-                do {
-                    // This scan also offers whole folders, so idle DerivedData projects go to that rule.
-                    return try GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category, rule: rule,
-                        activity: currentActivity, handsOffWholeFolders: true, maximumEntries: inventoryLimit)
-                } catch let limit as InventoryLimitExceeded {
-                    // Nothing is offered from a partial list, but the user must know why the folder is missing.
-                    warnings.append("\(seed.name) was skipped. \(limit.localizedDescription)")
-                    return nil
-                } catch {
-                    // A missing folder or a folder in use is a normal skip.
-                    return nil
+            let branches = await scanWholeFolderInventories(activity: currentActivity, home: home)
+            guard !Task.isCancelled else { return ScanReport(candidates: []) }
+            for branch in branches {
+                wholeFolders += branch.candidates
+                warnings += branch.warnings
+                seeds += branch.generatedRoots.map {
+                    Location(url: $0, name: $0.path.replacingOccurrences(of: home.path + "/", with: ""),
+                        category: .build, risk: .low, reason: "Generated files only", deletionMode: .generatedFiles)
                 }
             }
-            guard !currentActivity.contains(url) else { return nil }
-            return inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
-                           reason: seed.reason, deletionMode: seed.deletionMode)
         }
-        let offered = validated(candidates + wholeFolders).sorted { $0.size > $1.size }.prefix(100).map { $0 }
+        let uniqueSeeds = deduplicatedSeeds(seeds)
+        let seedResults = await inspectSeeds(uniqueSeeds, activity: currentActivity, home: home,
+                                             inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency)
+        guard !Task.isCancelled else { return ScanReport(candidates: []) }
+        var candidates: [CleanupCandidate] = []
+        for result in seedResults {
+            if let candidate = result.candidate { candidates.append(candidate) }
+            if let warning = result.warning { warnings.append(warning) }
+        }
+        let offered = validated(candidates + wholeFolders)
+            .sorted { lhs, rhs in
+                if lhs.size != rhs.size { return lhs.size > rhs.size }
+                if lhs.url.path != rhs.url.path { return lhs.url.path < rhs.url.path }
+                return lhs.name < rhs.name
+            }
+            .prefix(100)
+            .map { $0 }
         return ScanReport(candidates: offered, warnings: Task.isCancelled ? [] : warnings)
+    }
+
+    private static func scanWholeFolderInventories(activity: CleanupActivity, home: URL) async -> [WholeFolderBranch] {
+        await withTaskGroup(of: WholeFolderBranch.self) { group in
+            group.addTask {
+                var discoveryWarnings: [String] = []
+                let discovered = GeneratedCleanupScope.discoveryRoots(home: home).flatMap { root -> [URL] in
+                    guard !Task.isCancelled else { return [] }
+                    let result = GeneratedBuildDiscovery().discover(under: root)
+                    if result.limitReached { discoveryWarnings.append(discoveryWarning(root, home: home)) }
+                    return result.directories
+                }
+                guard !Task.isCancelled else { return WholeFolderBranch(index: 0) }
+                let temporary = TemporaryBuildInspector.scan(discovered: discovered, activity: activity, home: home)
+                return WholeFolderBranch(index: 0, candidates: temporary.candidates,
+                                         generatedRoots: temporary.generatedRoots, warnings: discoveryWarnings)
+            }
+            group.addTask {
+                WholeFolderBranch(index: 1, candidates: ProjectCacheInventory.candidates(activity: activity, home: home))
+            }
+            group.addTask {
+                WholeFolderBranch(index: 2, candidates: SimulatorInventory.candidates(activity: activity, home: home))
+            }
+            group.addTask {
+                WholeFolderBranch(index: 3, candidates: ToolCacheInventory.candidates(activity: activity, home: home))
+            }
+            group.addTask {
+                WholeFolderBranch(index: 4, candidates: EcosystemCacheInventory.candidates(activity: activity, home: home))
+            }
+            var branches: [WholeFolderBranch] = []
+            for await branch in group { branches.append(branch) }
+            return branches.sorted { $0.index < $1.index }
+        }
+    }
+
+    private static func deduplicatedSeeds(_ seeds: [Location]) -> [(Location, URL)] {
+        var seen = Set<String>()
+        return seeds.compactMap { seed in
+            let url = CleanupPath.fileURL(seed.url)
+            guard seen.insert(url.path).inserted else { return nil }
+            return (seed, url)
+        }
+    }
+
+    private static func inspectSeeds(_ seeds: [(Location, URL)], activity: CleanupActivity, home: URL,
+                                     inventoryLimit: Int, maxConcurrency: Int) async -> [SeedResult] {
+        await withTaskGroup(of: SeedResult.self) { group in
+            var nextIndex = 0
+            var results: [SeedResult] = []
+            results.reserveCapacity(seeds.count)
+            let limit = min(maxConcurrency, seeds.count)
+            while nextIndex < limit {
+                let index = nextIndex
+                let (seed, url) = seeds[index]
+                nextIndex += 1
+                group.addTask { inspectSeed(seed, url: url, index: index, activity: activity, home: home, inventoryLimit: inventoryLimit) }
+            }
+            while let result = await group.next() {
+                results.append(result)
+                if !Task.isCancelled, nextIndex < seeds.count {
+                    let index = nextIndex
+                    let (seed, url) = seeds[index]
+                    nextIndex += 1
+                    group.addTask { inspectSeed(seed, url: url, index: index, activity: activity, home: home, inventoryLimit: inventoryLimit) }
+                }
+            }
+            return results.sorted { $0.index < $1.index }
+        }
+    }
+
+    private static func inspectSeed(_ seed: Location, url: URL, index: Int, activity: CleanupActivity,
+                                    home: URL, inventoryLimit: Int) -> SeedResult {
+        guard !Task.isCancelled else { return SeedResult(index: index, candidate: nil, warning: nil) }
+        if seed.deletionMode == .generatedFiles {
+            guard let rule = GeneratedCleanupScope.rule(for: url, home: home) else {
+                return SeedResult(index: index, candidate: nil, warning: nil)
+            }
+            do {
+                // This scan also offers whole folders, so idle DerivedData projects go to that rule.
+                let candidate = try GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category, rule: rule,
+                    activity: activity, handsOffWholeFolders: true, maximumEntries: inventoryLimit)
+                return SeedResult(index: index, candidate: candidate, warning: nil)
+            } catch let limit as InventoryLimitExceeded {
+                // Nothing is offered from a partial list, but the user must know why the folder is missing.
+                return SeedResult(index: index, candidate: nil, warning: "\(seed.name) was skipped. \(limit.localizedDescription)")
+            } catch {
+                // A missing folder or a folder in use is a normal skip.
+                return SeedResult(index: index, candidate: nil, warning: nil)
+            }
+        }
+        guard !activity.contains(url) else { return SeedResult(index: index, candidate: nil, warning: nil) }
+        let candidate = inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
+                                reason: seed.reason, deletionMode: seed.deletionMode)
+        return SeedResult(index: index, candidate: candidate, warning: nil)
     }
 
     private static func discoveryWarning(_ root: URL, home: URL) -> String {

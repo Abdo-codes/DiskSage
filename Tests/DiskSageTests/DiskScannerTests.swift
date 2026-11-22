@@ -54,6 +54,53 @@ struct DiskScannerTests {
         #expect(try #require(DiskScanner.allocatedSize(of: root)) >= 64 * 1024)
     }
 
+    @Test func parallelSeedInspectionPreservesDeterministicOrderDeduplicationAndWarnings() async throws {
+        let base = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-parallel-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let zeta = base.appending(path: "Zeta/.build", directoryHint: .isDirectory)
+        let alpha = base.appending(path: "Alpha/.build", directoryHint: .isDirectory)
+        let overflowA = base.appending(path: "OverflowA/.build", directoryHint: .isDirectory)
+        let overflowB = base.appending(path: "OverflowB/.build", directoryHint: .isDirectory)
+        for path in [zeta, alpha] {
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            try Data(repeating: 1, count: 4_096).write(to: path.appending(path: "artifact"))
+        }
+        for path in [overflowA, overflowB] {
+            try FileManager.default.createDirectory(at: path.appending(path: "debug"), withIntermediateDirectories: true)
+            for i in 0..<5 { try Data(repeating: 2, count: 4_096).write(to: path.appending(path: "debug/\(i).o")) }
+        }
+        let locations = [
+            DiskScanner.Location(url: zeta, name: "Zeta", category: .build, risk: .low, reason: "Fixture", deletionMode: .item),
+            DiskScanner.Location(url: alpha, name: "Alpha", category: .build, risk: .low, reason: "Fixture", deletionMode: .item),
+            // Duplicate of Alpha must be deduplicated cleanly.
+            DiskScanner.Location(url: alpha, name: "Alpha dup", category: .build, risk: .low, reason: "Fixture", deletionMode: .item),
+            DiskScanner.Location(url: overflowA, name: "Overflow A", category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles),
+            DiskScanner.Location(url: overflowB, name: "Overflow B", category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles),
+        ]
+        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4, maxConcurrency: 4).report()
+        // Equal-sized candidates tie-break deterministically by path (Alpha before Zeta).
+        #expect(report.candidates.map(\.name) == ["Alpha", "Zeta"])
+        // Warnings preserve deterministic seed order regardless of task completion order.
+        let limitMessage = InventoryLimitExceeded(limit: 4).localizedDescription
+        #expect(report.warnings == [
+            "Overflow A was skipped. \(limitMessage)",
+            "Overflow B was skipped. \(limitMessage)",
+        ])
+    }
+
+    @Test func cancellingScanReturnsEmptyReportCleanly() async throws {
+        let task = Task {
+            try await DiskScanner(locations: [], activity: {
+                while !Task.isCancelled { usleep(5_000) }
+                return .idle
+            }).report()
+        }
+        task.cancel()
+        let report = try await task.value
+        #expect(report.candidates.isEmpty)
+        #expect(report.warnings.isEmpty)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DISKSAGE_LIVE_SCAN_TEST"] == "1"))
     func liveScanCandidatesPassPolicyOnThisMac() async throws {
         let candidates = try await DiskScanner().scan()
