@@ -43,7 +43,7 @@ struct TemporaryBuildTests {
     @Test func idleDerivedDataIsOfferedAsWholeFolderAndDeleted() throws {
         let f = try TemporaryBuildFixture(); defer { f.remove() }
         let derived = try f.derivedData("app-derived")
-        try f.write("app-derived/SourcePackages/checkouts/package/.git/HEAD")
+        try f.swiftPMClone(in: "app-derived/SourcePackages", name: "package")
         #expect(TemporaryBuildInspector.inspect(derived, activity: .idle, now: f.later(hours: 1), home: f.home) == nil)
         let medium = try #require(TemporaryBuildInspector.inspect(derived, activity: .idle, now: f.later(hours: 8), home: f.home))
         #expect(medium.risk == .medium)

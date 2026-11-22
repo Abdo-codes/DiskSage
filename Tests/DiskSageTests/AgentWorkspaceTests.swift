@@ -52,10 +52,9 @@ struct AgentWorkspaceTests {
     @Test func swiftPackageFoldersAreFoundByLayoutAndMayHoldGitClones() throws {
         let f = try TemporaryBuildFixture(); defer { f.remove() }
         try f.write("lane-sp/workspace-state.json")
-        try f.write("lane-sp/repositories/pkg-1/HEAD")
-        try f.write("lane-sp/checkouts/pkg/.git/HEAD")
+        try f.swiftPMClone(in: "lane-sp", name: "pkg")
         try f.write("lane-cache/manifests/m.json")
-        try f.write("lane-cache/repositories/pkg-1/HEAD")
+        try f.swiftPMClone(in: "lane-cache", name: "pkg")
         try f.write("not-packages/repositories/x")
         let sp = CleanupPath.fileURL(f.base.appending(path: "lane-sp"))
         #expect(TemporaryBuildOutput.kind(of: sp, home: f.base) == .swiftPackages)
@@ -92,7 +91,7 @@ struct AgentWorkspaceTests {
     @Test func discoveredSwiftPackageFolderIsOfferedWhole() throws {
         let f = try TemporaryBuildFixture(); defer { f.remove() }
         try f.write("Documents/Codex/2026-11-08/yo/work/.build/workspace-state.json")
-        try f.write("Documents/Codex/2026-11-08/yo/work/.build/repositories/pkg-1/HEAD")
+        try f.swiftPMClone(in: "Documents/Codex/2026-11-08/yo/work/.build", name: "pkg")
         let build = CleanupPath.fileURL(f.base.appending(path: "Documents/Codex/2026-11-08/yo/work/.build"))
         let result = TemporaryBuildInspector.scan(discovered: [build], activity: .idle, now: f.later(hours: 30),
                                                   home: f.base, extraFolders: { [] })
