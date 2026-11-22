@@ -30,6 +30,20 @@ enum ProjectCacheRulesLoader {
 
     static let maximumFileBytes: off_t = 1_048_576
     static let minimumQuietHours: Double = 1
+    static let editableQuietHoursRange: ClosedRange<Int> = 1...168
+
+    /// Validates that `quiet_hours` fits safely inside the Settings UI's integer stepper range without trapping.
+    static func editableQuietHours(from config: UserConfig) throws -> Int {
+        guard let raw = config.quietHours else { return Int(ProjectCacheRules.default.quietHours) }
+        let minValue = Double(editableQuietHoursRange.lowerBound)
+        let maxValue = Double(editableQuietHoursRange.upperBound)
+        guard raw.isFinite, raw >= minValue, raw <= maxValue, raw.rounded() == raw else {
+            throw FeatureFailure(
+                message: "quiet_hours (\(raw)) is outside the Settings UI range (\(editableQuietHoursRange.lowerBound)–\(editableQuietHoursRange.upperBound) whole hours). Edit rules.json directly."
+            )
+        }
+        return Int(raw)
+    }
 
     static func configURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                           env: [String: String]? = nil) -> URL {

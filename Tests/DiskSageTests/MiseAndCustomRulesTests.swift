@@ -234,4 +234,14 @@ struct MiseAndCustomRulesTests {
             try ProjectCacheRulesLoader.save(config, to: linkRules, home: f.base)
         }
     }
+
+    @Test func editableQuietHoursRejectsOutOfRangeAndOverflowingValuesWithoutTrapping() throws {
+        #expect(try ProjectCacheRulesLoader.editableQuietHours(from: .init()) == 24)
+        #expect(try ProjectCacheRulesLoader.editableQuietHours(from: .init(quietHours: 48)) == 48)
+        for bad in [0.0, 0.5, 1.5, 169.0, 1e100, Double.infinity, Double.nan] {
+            #expect(throws: (any Error).self) {
+                _ = try ProjectCacheRulesLoader.editableQuietHours(from: .init(quietHours: bad))
+            }
+        }
+    }
 }

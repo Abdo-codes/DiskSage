@@ -109,8 +109,9 @@ struct ProjectCacheRulesSettingsView: View {
         let url = ProjectCacheRulesLoader.configURL()
         do {
             let config = try ProjectCacheRulesLoader.loadConfig(from: url)
+            let editableHours = try ProjectCacheRulesLoader.editableQuietHours(from: config)
             preservedConfig = config
-            quietHours = Int((config.quietHours ?? ProjectCacheRules.default.quietHours).rounded())
+            quietHours = editableHours
             extraRootsText = (config.extraRoots ?? []).joined(separator: "\n")
             extraNamesText = (config.names ?? []).joined(separator: ", ")
             extraSkipText = (config.skip ?? []).joined(separator: ", ")
