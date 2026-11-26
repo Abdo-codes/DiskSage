@@ -224,7 +224,8 @@ struct ProjectCacheRulesSettingsView: View {
 
         for url in panel.urls {
             let formatted = KeepRules.displayPath(url)
-            guard ProjectCacheRulesLoader.invalidExtraRoots([formatted]).isEmpty else {
+            guard KeepRules.canRepresent(url),
+                  ProjectCacheRulesLoader.invalidExtraRoots([formatted]).isEmpty else {
                 rejected.append(url.lastPathComponent)
                 continue
             }

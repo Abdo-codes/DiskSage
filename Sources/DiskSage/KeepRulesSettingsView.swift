@@ -5,6 +5,7 @@ import SwiftUI
 struct KeepRulesSettingsView: View {
     @AppStorage(KeepRules.pathsKey) private var paths = ""
     @AppStorage(KeepRules.simulatorNamesKey) private var simulatorNames = ""
+    @State private var pickerError: String?
 
     var body: some View {
         Section {
@@ -20,6 +21,11 @@ struct KeepRulesSettingsView: View {
                 let invalid = KeepRules.invalidPaths(paths)
                 if !invalid.isEmpty {
                     Text("Use absolute paths or paths that start with ~/. Ignored: \(invalid.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let pickerError {
+                    Text(pickerError)
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
@@ -39,6 +45,13 @@ struct KeepRulesSettingsView: View {
         panel.allowsMultipleSelection = true
         panel.prompt = "Keep"
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        paths = KeepRules.appending(urls: panel.urls, to: paths)
+        let result = KeepRules.append(urls: panel.urls, to: paths)
+        paths = result.text
+        if !result.unsupported.isEmpty {
+            let names = result.unsupported.map(\.lastPathComponent).joined(separator: ", ")
+            pickerError = "Skipped unsupported path(s) (paths containing line breaks or leading/trailing spaces cannot be stored in Keep rules): \(names)."
+        } else {
+            pickerError = nil
+        }
     }
 }

@@ -113,7 +113,7 @@ struct CacheReviewView: View {
                        systemImage: "pin.slash") {
                     model.keepCandidates(items)
                 }
-                .disabled(model.isCleaning || model.pendingDeletionRequest != nil)
+                .disabled(model.isBusy)
             }
         }
         .overlay {

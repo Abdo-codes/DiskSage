@@ -138,8 +138,18 @@ struct KeepRulesTests {
         let domain = "DiskSage.KeepRulesWriteTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
-        #expect(KeepRules.keep([folder], defaults: defaults, home: home))
-        #expect(!KeepRules.keep([folder], defaults: defaults, home: home))
+        #expect(KeepRules.keep([folder], defaults: defaults, home: home).added == [folder])
+        #expect(KeepRules.keep([folder], defaults: defaults, home: home).added.isEmpty)
+        #expect(defaults.string(forKey: KeepRules.pathsKey) == "~/Developer/app/.build")
+
+        // Paths that cannot round-trip cleanly through line-based KeepRules are rejected cleanly.
+        let trailingSpace = home.appending(path: "Downloads/important ")
+        let embeddedNewline = home.appending(path: "Downloads/important\nfile")
+        #expect(!KeepRules.canRepresent(trailingSpace, home: home))
+        #expect(!KeepRules.canRepresent(embeddedNewline, home: home))
+        let rejected = KeepRules.keep([trailingSpace, embeddedNewline], defaults: defaults, home: home)
+        #expect(rejected.added.isEmpty)
+        #expect(rejected.unsupported == [trailingSpace, embeddedNewline])
         #expect(defaults.string(forKey: KeepRules.pathsKey) == "~/Developer/app/.build")
 
         let parent = CleanupCandidate(
@@ -154,9 +164,13 @@ struct KeepRulesTests {
             url: home.appending(path: "Developer/other/.build"),
             name: "other/.build", category: .build, size: 25, risk: .low, reason: "Other"
         )
+        let badCandidate = CleanupCandidate(
+            url: URL(fileURLWithPath: "/private/tmp/bad "),
+            name: "bad ", category: .cache, size: 10, risk: .low, reason: "Bad path"
+        )
         var initial = AppFeature.State()
-        initial.candidates = [parent, target, unrelated]
-        initial.selection = [target.id, unrelated.id]
+        initial.candidates = [parent, target, unrelated, badCandidate]
+        initial.selection = [target.id, unrelated.id, badCandidate.id]
         initial.recommendations = [target.id: .init(id: target.id, decision: .review, rationale: "r")]
         initial.cleanupFailures = [CleanupItemResult(candidate: target, removedBytes: 0, errorDescription: "err")]
 
@@ -166,10 +180,32 @@ struct KeepRulesTests {
         }
         await store.send(.keepCandidates([target])).finish()
         #expect(recordedURLs.value == [folder])
-        #expect(store.candidates.map(\.id) == [unrelated.id])
-        #expect(store.selection == [unrelated.id])
+        #expect(store.candidates.map(\.id) == [unrelated.id, badCandidate.id])
+        #expect(store.selection == [unrelated.id, badCandidate.id])
         #expect(store.recommendations[target.id] == nil)
         #expect(store.cleanupFailures.isEmpty)
         #expect(store.statusMessage.contains("Kept app/.build"))
+
+        // Unrepresentable candidate stays in review and is reported via errorMessage without writing.
+        recordedURLs.setValue([])
+        await store.send(.keepCandidates([badCandidate])).finish()
+        #expect(recordedURLs.value.isEmpty)
+        #expect(store.candidates.map(\.id) == [unrelated.id, badCandidate.id])
+        #expect(store.selection == [unrelated.id, badCandidate.id])
+        #expect(store.errorMessage?.contains("bad ") == true)
+
+        // Active scans ignore Keep so an in-flight scan cannot restore newly kept items.
+        var scanningState = AppFeature.State()
+        scanningState.operation = .scanning
+        scanningState.candidates = [unrelated]
+        scanningState.selection = [unrelated.id]
+        let scanningCalls = LockIsolated<[URL]>([])
+        let scanningStore = ManagementTestSupport.store(scanningState) {
+            $0.management.keepPaths = { urls in scanningCalls.setValue(urls) }
+        }
+        await scanningStore.send(.keepCandidates([unrelated])).finish()
+        #expect(scanningCalls.value.isEmpty)
+        #expect(scanningStore.candidates.map(\.id) == [unrelated.id])
+        #expect(scanningStore.selection == [unrelated.id])
     }
 }

@@ -41,8 +41,26 @@ struct KeepRules: Sendable, Equatable {
         return canonicalTarget.path
     }
 
-    static func appending(urls: [URL], to existingText: String,
-                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+    struct AppendResult: Equatable, Sendable {
+        let text: String
+        let added: [URL]
+        let unsupported: [URL]
+    }
+
+    static func canRepresent(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let canonical = CleanupPath.fileURL(url).path
+        guard !canonical.isEmpty, canonical != "/" else { return false }
+        let formatted = displayPath(url, home: canonicalHome)
+        guard !formatted.contains(where: \.isNewline),
+              formatted.trimmingCharacters(in: .whitespaces) == formatted else {
+            return false
+        }
+        return parse(paths: formatted, simulatorNames: "", home: canonicalHome).paths == [canonical]
+    }
+
+    static func append(urls: [URL], to existingText: String,
+                       home: URL = FileManager.default.homeDirectoryForCurrentUser) -> AppendResult {
         let canonicalHome = CleanupPath.fileURL(home)
         var existingLines = lines(existingText, separators: "\n")
         var seenKeys = Set(existingLines.compactMap { line -> String? in
@@ -50,26 +68,36 @@ struct KeepRules: Sendable, Equatable {
             guard expanded.hasPrefix("/"), expanded != "/" else { return nil }
             return Self.key(CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path)
         })
+        var added: [URL] = []
+        var unsupported: [URL] = []
         for url in urls {
-            let formatted = displayPath(url, home: canonicalHome)
+            guard canRepresent(url, home: canonicalHome) else {
+                unsupported.append(url)
+                continue
+            }
             let canonical = CleanupPath.fileURL(url).path
-            guard !canonical.isEmpty, canonical != "/" else { continue }
             let k = Self.key(canonical)
             guard seenKeys.insert(k).inserted else { continue }
-            existingLines.append(formatted)
+            existingLines.append(displayPath(url, home: canonicalHome))
+            added.append(url)
         }
-        return existingLines.joined(separator: "\n")
+        return AppendResult(text: existingLines.joined(separator: "\n"), added: added, unsupported: unsupported)
+    }
+
+    static func appending(urls: [URL], to existingText: String,
+                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        append(urls: urls, to: existingText, home: home).text
     }
 
     @discardableResult
     static func keep(_ urls: [URL], defaults: UserDefaults = .standard,
-                     home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) -> AppendResult {
         let existing = defaults.string(forKey: pathsKey) ?? ""
-        let updated = appending(urls: urls, to: existing, home: home)
-        guard updated != existing else { return false }
-        defaults.set(updated, forKey: pathsKey)
+        let result = append(urls: urls, to: existing, home: home)
+        guard !result.added.isEmpty, result.text != existing else { return result }
+        defaults.set(result.text, forKey: pathsKey)
         NotificationCenter.default.post(name: .diskSageSettingsChanged, object: nil)
-        return true
+        return result
     }
 
     /// True when the item is a kept path, is inside one, or contains one.

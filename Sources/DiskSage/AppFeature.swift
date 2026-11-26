@@ -148,17 +148,26 @@ struct AppFeature {
                 return reduceSchedules(state: &state, action: action)
             case let .selectionChanged(selection): state.selection = selection; return .none
             case let .keepCandidates(targets):
-                guard !targets.isEmpty, !state.isCleaning, state.pendingDeletionRequest == nil else { return .none }
-                let addedRules = KeepRules(paths: targets.map { CleanupPath.fileURL($0.url).path })
+                guard !targets.isEmpty, !state.isBusy else { return .none }
+                let supported = targets.filter { KeepRules.canRepresent($0.url) }
+                let unsupported = targets.filter { !KeepRules.canRepresent($0.url) }
+                if !unsupported.isEmpty {
+                    let names = unsupported.map(\.name).joined(separator: ", ")
+                    state.errorMessage = "Could not add to Keep rules because paths with line breaks or leading/trailing spaces cannot be stored safely: \(names)."
+                } else {
+                    state.errorMessage = nil
+                }
+                guard !supported.isEmpty else { return .none }
+                let addedRules = KeepRules(paths: supported.map { CleanupPath.fileURL($0.url).path })
                 let removedIDs = Set(state.candidates.filter { addedRules.keeps($0.url) }.map(\.id))
                 state.candidates.removeAll { removedIDs.contains($0.id) }
                 state.selection.subtract(removedIDs)
                 for id in removedIDs { state.recommendations[id] = nil }
                 state.cleanupFailures.removeAll { removedIDs.contains($0.candidate.id) }
-                state.statusMessage = targets.count == 1
-                    ? "Kept \(targets[0].name). It will be excluded from future scans."
-                    : "Kept \(targets.count) items. They will be excluded from future scans."
-                let urls = targets.map(\.url)
+                state.statusMessage = supported.count == 1
+                    ? "Kept \(supported[0].name). It will be excluded from future scans."
+                    : "Kept \(supported.count) items. They will be excluded from future scans."
+                let urls = supported.map(\.url)
                 return .run { [management] _ in await management.keepPaths(urls) }
             case let .presentationError(error): state.errorMessage = error; return .none
             case let .toolConnectionChanged(error): state.agentToolConnectionError = error; return .none
