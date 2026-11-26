@@ -16,8 +16,7 @@ final class DashboardPanelController {
     private var anchorX: CGFloat = 0
     private var heightLimited = false
     private var layingOut = false
-    private var observers: [NSObjectProtocol] = []
-    private var accessibilityObserver: NSObjectProtocol?
+    private var observerTokens: [NotificationToken] = []
     private let presentationLog = Logger(subsystem: "com.abdoeaita.DiskSage", category: "Presentation")
     private var lastAnchors: [String: Double] {
         get { UserDefaults.standard.dictionary(forKey: "dashboardAnchorOffsets") as? [String: Double] ?? [:] }
@@ -49,13 +48,15 @@ final class DashboardPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.cancel = { [weak self] in self?.hide() }
         for name in [NSApplication.didResignActiveNotification, NSApplication.didChangeScreenParametersNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.hide() }
-            })
+            }
+            observerTokens.append(NotificationToken(center: .default, token: token))
         }
-        accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        let accessibilityToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.hide() } }
+        observerTokens.append(NotificationToken(center: NSWorkspace.shared.notificationCenter, token: accessibilityToken))
     }
 
     func show(button: NSStatusBarButton, invocation: PopupPlacement.Invocation, on requestedScreen: NSScreen? = nil) {
@@ -159,10 +160,19 @@ final class DashboardPanelController {
         let visible = NSStringFromRect(screen.visibleFrame)
         presentationLog.notice("dashboardShown display=\(screen.localizedName, privacy: .public) windowServerBounds=\(geometry, privacy: .public) visibleFrame=\(visible, privacy: .public)")
     }
+}
+
+private final class NotificationToken: @unchecked Sendable {
+    private let center: NotificationCenter
+    private let token: NSObjectProtocol
+
+    init(center: NotificationCenter, token: NSObjectProtocol) {
+        self.center = center
+        self.token = token
+    }
 
     deinit {
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        if let accessibilityObserver { NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver) }
+        center.removeObserver(token)
     }
 }
 

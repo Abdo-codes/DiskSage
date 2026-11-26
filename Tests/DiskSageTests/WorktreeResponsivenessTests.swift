@@ -7,7 +7,11 @@ import Testing
 struct WorktreeResponsivenessTests {
     @Test func confirmationClosesWhileRemovalContinuesAndBrowsingStaysAvailable() async throws {
         let first = WorktreesFeatureTests.item()
-        var second = first; second.worktree.path += "-second"
+        let second: WorktreeInspection = {
+            var item = first
+            item.worktree.path += "-second"
+            return item
+        }()
         let jobID = UUID()
         let preview = WorktreePreview(items: [first], toolRequestID: jobID)
         let (started, didStart) = AsyncStream<Void>.makeStream()

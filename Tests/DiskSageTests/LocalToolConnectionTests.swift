@@ -77,7 +77,11 @@ struct LocalToolConnectionTests {
             }
             let response = try #require(JSONSerialization.jsonObject(with: accepted) as? [String: Any])
             #expect((response["result"] as? [String: Any])?["isError"] as? Bool == false)
-            let completed = await completions.stream.first { _ in true }
+            var completed: AgentToolJob?
+            for await job in completions.stream {
+                completed = job
+                break
+            }
             #expect(completed?.phase == .succeeded)
             let finished = try await onSocketQueue {
                 try LocalToolConnection.call(.init(action: .job, requestID: id), path: path)

@@ -20,12 +20,12 @@ enum MCPManagementSchema {
                     "idempotentHint": requestID || readOnly, "openWorldHint": name == "request_advice" || name == "list_models"]]
         }
     }
-    static let uuid: [String: Any] = ["type": "string", "format": "uuid"]
-    static let text: [String: Any] = ["type": "string", "maxLength": 4_096]
-    static let boolean: [String: Any] = ["type": "boolean"]
+    static var uuid: [String: Any] { ["type": "string", "format": "uuid"] }
+    static var text: [String: Any] { ["type": "string", "maxLength": 4_096] }
+    static var boolean: [String: Any] { ["type": "boolean"] }
     static func choice(_ values: [String]) -> [String: Any] { ["type": "string", "enum": values] }
     static func integer(_ low: Int, _ high: Int) -> [String: Any] { ["type": "integer", "minimum": low, "maximum": high] }
-    static let ids: [String: Any] = ["type": "array", "items": uuid, "maxItems": 100, "uniqueItems": true]
+    static var ids: [String: Any] { ["type": "array", "items": uuid, "maxItems": 100, "uniqueItems": true] }
     static var page: [String: [String: Any]] { ["offset": integer(0, Int.max), "limit": integer(1, 100)] }
     static var timing: [String: [String: Any]] {
         ["frequency": choice(["daily", "weekly", "once"]), "hour": integer(0, 23), "minute": integer(0, 59),

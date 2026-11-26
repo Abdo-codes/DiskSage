@@ -19,5 +19,5 @@ let package = Package(
         ]),
         .testTarget(name: "DiskSageTests", dependencies: ["DiskSage"])
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )
