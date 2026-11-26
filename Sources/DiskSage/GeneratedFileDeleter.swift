@@ -66,8 +66,10 @@ enum GeneratedFileDeleter {
         var lastActivityCheck = Date()
         let uid = getuid()
         var rootFD: Int32 = -1
+        var verifiedRootPath: String?
         var currentParentParts: [String]?
         var currentParentFD: Int32 = -1
+        var verifiedParentPath: String?
         var currentParentOriginalMode: mode_t?
 
         func closeCurrentParent() throws {
@@ -75,6 +77,7 @@ enum GeneratedFileDeleter {
             let originalMode = currentParentOriginalMode
             currentParentFD = -1
             currentParentParts = nil
+            verifiedParentPath = nil
             currentParentOriginalMode = nil
             guard fd >= 0 else { return }
             defer { close(fd) }
@@ -88,6 +91,7 @@ enum GeneratedFileDeleter {
                 close(rootFD)
                 rootFD = -1
             }
+            verifiedRootPath = nil
         }
 
         defer {
@@ -105,20 +109,39 @@ enum GeneratedFileDeleter {
                     try activity().requireIdle(candidate.url, rule: snapshot.rule)
                     lastActivityCheck = Date()
                 }
-                if rootFD < 0 {
-                    rootFD = try openVerifiedRoot(for: candidate)
-                }
                 guard let name = entry.parts.last, !name.isEmpty else {
                     throw SecureDeletionError.identityChanged
                 }
                 let parentParts = Array(entry.parts.dropLast())
-                if currentParentParts != parentParts || currentParentFD < 0 {
+                let reuseCachedParent = currentParentParts == parentParts && currentParentFD >= 0 && verifiedParentPath != nil
+                if reuseCachedParent {
+                    if let expectedRoot = verifiedRootPath, directoryPath(of: rootFD) != expectedRoot {
+                        throw SecureDeletionError.identityChanged
+                    }
+                    guard directoryPath(of: currentParentFD) == verifiedParentPath else {
+                        throw SecureDeletionError.identityChanged
+                    }
+                } else {
                     try closeCurrentParent()
+                    if rootFD >= 0 {
+                        if let expectedRoot = verifiedRootPath {
+                            guard directoryPath(of: rootFD) == expectedRoot else {
+                                throw SecureDeletionError.identityChanged
+                            }
+                        } else {
+                            closeRoot()
+                        }
+                    }
+                    if rootFD < 0 {
+                        rootFD = try openVerifiedRoot(for: candidate)
+                        verifiedRootPath = directoryPath(of: rootFD)
+                    }
                     currentParentFD = try openVerifiedParent(
                         from: rootFD, parentParts: parentParts[...],
                         device: candidate.identity.device, uid: uid
                     )
                     currentParentParts = parentParts
+                    verifiedParentPath = directoryPath(of: currentParentFD)
                 }
                 var actual = stat()
                 guard fstatat(currentParentFD, name, &actual, AT_SYMLINK_NOFOLLOW) == 0,
@@ -166,6 +189,12 @@ enum GeneratedFileDeleter {
         let entries = inventory.entries.filter { known.contains($0.fingerprint) }
         guard !entries.isEmpty, entries.count <= snapshot.fileCount else { throw SecureDeletionError.identityChanged }
         return entries
+    }
+
+    private static func directoryPath(of fd: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+        return String(cString: buffer)
     }
 
     private static func openVerifiedRoot(for candidate: CleanupCandidate) throws -> Int32 {

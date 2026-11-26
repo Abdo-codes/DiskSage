@@ -201,4 +201,43 @@ struct GeneratedCleanupTests {
         #expect(lstat(releaseDir.path, &releaseInfo) == 0)
         #expect(releaseInfo.st_mode & 0o777 == 0o555)
     }
+
+    @Test func midBatchParentMoveAndSymlinkSwapRefusesSubsequentSibling() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        try f.write("debug/a.o"); try f.write("debug/b.o")
+        let saved = f.home.appending(path: "saved-debug")
+        let target = try #require(try f.candidate())
+        do {
+            try f.delete(target, before: { index in
+                if index == 1 {
+                    let debugDir = f.root.appending(path: "debug")
+                    try FileManager.default.moveItem(at: debugDir, to: saved)
+                    try FileManager.default.createSymbolicLink(at: debugDir, withDestinationURL: saved)
+                }
+            })
+            Issue.record("Expected PartialCleanupFailure")
+        } catch let partial as PartialCleanupFailure {
+            #expect(partial.removedFiles == 1)
+        }
+        #expect(FileManager.default.fileExists(atPath: saved.appending(path: "b.o").path))
+    }
+
+    @Test func midBatchRootMoveBetweenSubdirectoriesRefusesNextDirectory() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        try f.write("debug/a.o"); try f.write("release/b.o")
+        let movedRoot = f.home.appending(path: "moved-root")
+        let target = try #require(try f.candidate())
+        do {
+            try f.delete(target, before: { index in
+                if index == 1 {
+                    try FileManager.default.moveItem(at: f.root, to: movedRoot)
+                    try FileManager.default.createSymbolicLink(at: f.root, withDestinationURL: movedRoot)
+                }
+            })
+            Issue.record("Expected PartialCleanupFailure")
+        } catch let partial as PartialCleanupFailure {
+            #expect(partial.removedFiles == 1)
+        }
+        #expect(FileManager.default.fileExists(atPath: movedRoot.appending(path: "release/b.o").path))
+    }
 }
