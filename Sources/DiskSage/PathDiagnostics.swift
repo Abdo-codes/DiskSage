@@ -44,6 +44,7 @@ enum PathDiagnostics {
         miseEnv: MiseProjectDiscovery.Environment? = nil,
         git: WorktreeGitProcess = WorktreeGitProcess(),
         simctl: SimulatorInventory.Run = SimulatorInventory.simctl,
+        runtimes: [SimulatorRuntime]? = nil,
         toolRun: ToolCacheInventory.Run = ToolCacheInventory.process,
         toolTrusted: ToolCacheInventory.Trusted = ToolCacheInventory.isTrusted,
         minimumProjectBytes: Int64 = ProjectCacheInventory.defaultMinimumBytes,
@@ -85,6 +86,12 @@ enum PathDiagnostics {
         }
         if let set = SimulatorInventory.deviceSet(for: url, home: canonicalHome) {
             return explainSimulator(url, set: set, activity: activity, keep: keep, run: simctl)
+        }
+        if runtimes != nil || isPotentialSimulatorRuntimePath(url),
+           let listed = runtimes ?? (try? SimulatorRuntimeInventory.runtimes(run: simctl)),
+           let runtime = listed.first(where: { runtimeMatches($0, url: url) }) {
+            return explainSimulatorRuntime(runtime, url: url, activity: activity, now: now,
+                                           home: canonicalHome, keep: keep, simctl: simctl)
         }
         if let session = ClaudeSessionActivity.session(containing: url),
            ClaudeSessionActivity.isLive(session, activity: activity, now: now) {
@@ -262,6 +269,113 @@ enum PathDiagnostics {
                               sizeBytes: bytes, summary: "Shut-down simulator \(device.name) (\(device.runtimeTitle)).", reasons: [])
     }
 
+    private static func isPotentialSimulatorRuntimePath(_ url: URL) -> Bool {
+        let path = url.path
+        if path.hasPrefix("/System/Library/AssetsV2/")
+            || path.hasPrefix("/Library/Developer/CoreSimulator/Images/")
+            || path.hasPrefix("/Library/Developer/CoreSimulator/Profiles/Runtimes/")
+            || path.hasPrefix("/Library/Developer/CoreSimulator/Volumes/") {
+            return true
+        }
+        return url.pathComponents.contains { $0.hasSuffix(".simruntime") }
+    }
+
+    private static func runtimeMatches(_ runtime: SimulatorRuntime, url: URL) -> Bool {
+        let candidates = [runtime.path, runtime.mountPath, runtime.runtimeBundlePath].compactMap { $0 }
+        return candidates.contains { CleanupPath.fileURL(URL(fileURLWithPath: $0)) == url }
+    }
+
+    private static func explainSimulatorRuntime(
+        _ runtime: SimulatorRuntime,
+        url: URL,
+        activity: CleanupActivity,
+        now: Date,
+        home: URL,
+        keep: KeepRules,
+        simctl: SimulatorInventory.Run
+    ) -> PathDiagnostic {
+        let matcher = "Simulator runtime (\(runtime.title))"
+        var reasons: [String] = []
+        if !runtime.deletable { reasons.append("CoreSimulator marked this runtime non-deletable.") }
+        if runtime.sizeBytes <= 0 { reasons.append("Runtime image reports zero reclaimable bytes.") }
+        let runtimeURL = CleanupPath.fileURL(URL(fileURLWithPath: runtime.path))
+        var keptPaths = [runtimeURL]
+        for rawPath in [url.path, runtime.mountPath, runtime.runtimeBundlePath].compactMap({ $0 }) {
+            let candidateURL = CleanupPath.fileURL(URL(fileURLWithPath: rawPath))
+            if !keptPaths.contains(candidateURL) { keptPaths.append(candidateURL) }
+        }
+        if keptPaths.contains(where: { keep.keeps($0) })
+            || keep.keepsSimulator(named: runtime.title)
+            || keep.keepsSimulator(named: runtime.platformVersion) {
+            reasons.append("Protected by a Keep rule in Settings.")
+        }
+        if keptPaths.contains(where: { activity.contains($0) }) {
+            reasons.append("A running process has open files in this simulator runtime.")
+        }
+        if !runtime.isUnusable {
+            if runtime.state.caseInsensitiveCompare("Ready") != .orderedSame {
+                let label = runtime.state.isEmpty ? "unknown" : runtime.state
+                reasons.append("Simulator runtime state is \(label).")
+            }
+            var usedRuntimes = Set<String>()
+            var deviceListingFailed = false
+            for set in SimulatorInventory.DeviceSet.allCases {
+                let root = set.root(home: home)
+                if set == .previews, !FileManager.default.fileExists(atPath: root.path) { continue }
+                do {
+                    for device in try SimulatorInventory.devices(in: set, run: simctl) {
+                        usedRuntimes.insert(device.runtime)
+                    }
+                } catch {
+                    deviceListingFailed = true
+                    break
+                }
+            }
+            if deviceListingFailed {
+                reasons.append("simctl could not list simulator devices to verify whether this runtime is unused.")
+            } else if usedRuntimes.contains(runtime.runtimeIdentifier) {
+                reasons.append("Used by at least one configured simulator device.")
+            }
+            if let lastUsed = runtime.lastUsedAt,
+               now.timeIntervalSince(lastUsed) < SimulatorRuntimeInventory.minimumIdleForReadyUnused {
+                reasons.append("Simulator runtime was used within the last 24 hours.")
+            }
+        }
+        var info = stat()
+        if lstat(runtimeURL.path, &info) != 0 {
+            reasons.append("The simulator runtime image on disk could not be inspected.")
+        } else if (info.st_mode & S_IFMT) == S_IFLNK {
+            reasons.append("Symlinked simulator runtime targets are not allowed.")
+        } else if reasons.isEmpty {
+            let identity = FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+            let candidate = CleanupCandidate(
+                url: runtimeURL,
+                name: runtime.title,
+                category: .simulator,
+                size: runtime.sizeBytes,
+                risk: .medium,
+                reason: "",
+                identity: identity,
+                deletionMode: .simulatorRuntime,
+                simulatorRuntimeID: runtime.identifier
+            )
+            do {
+                try SafetyPolicy(home: home, now: now, keep: keep).validate(candidate)
+            } catch {
+                reasons.append(error.localizedDescription)
+            }
+        }
+        let reportedSize = runtime.sizeBytes > 0 ? runtime.sizeBytes : nil
+        guard reasons.isEmpty else {
+            return skipped(url, matcher: matcher, sizeBytes: reportedSize, reasons: reasons)
+        }
+        let summary = runtime.isUnusable
+            ? "Unusable simulator runtime image. Deleting it via simctl reclaims disk space without affecting working simulators."
+            : "Unused simulator runtime with no configured devices. Xcode can download it again if needed."
+        return PathDiagnostic(path: url.path, verdict: .eligible, matcher: matcher, risk: "medium",
+                              sizeBytes: reportedSize, summary: summary, reasons: [])
+    }
+
     private static func explainTemporaryBuild(_ url: URL, activity: CleanupActivity, now: Date, home: URL) -> PathDiagnostic {
         if let candidate = TemporaryBuildInspector.inspect(url, activity: activity, now: now, home: home) {
             return PathDiagnostic(path: url.path, verdict: .eligible, matcher: "Temporary build output",
@@ -310,7 +424,7 @@ enum PathDiagnostics {
             let resolvedClaudeDir = claudeDir ?? ProjectCacheInventory.defaultClaudeProjectsDirectory(home: home)
             let folders = ProjectCacheInventory.listSubdirectories(resolvedClaudeDir)
             if let last = ProjectCacheInventory.projectLastActivity(root: repo, claudeDir: resolvedClaudeDir,
-                                                                    claudeFolders: folders, git: git) {
+                                                                    claudeFolders: folders, now: now, git: git) {
                 if now.timeIntervalSince(last) < rules.quietHours * 3_600 {
                     reasons.append("Owning project had Git or Claude Code activity within the \(Int(rules.quietHours))-hour quiet period.")
                 }

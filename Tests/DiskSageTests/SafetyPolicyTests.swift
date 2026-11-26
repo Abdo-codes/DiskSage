@@ -11,7 +11,7 @@ struct SafetyPolicyTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let candidate = CleanupCandidate(
-            url: fixture.root.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
+            url: fixture.home.appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory),
             name: "DerivedData",
             category: .build,
             size: 1,
@@ -19,10 +19,10 @@ struct SafetyPolicyTests {
             reason: "Generated"
         )
         try FileManager.default.createDirectory(at: candidate.url, withIntermediateDirectories: true)
-        try SafetyPolicy(home: fixture.root).validate(candidate)
+        try SafetyPolicy(home: fixture.home).validate(candidate)
         // The same allowlisted cache container must refuse nested checkout data.
         try FileManager.default.createDirectory(at: candidate.url.appending(path: "SourcePackages/checkouts/dependency/.git"), withIntermediateDirectories: true)
-        #expect(throws: SafetyPolicyError.self) { try SafetyPolicy(home: fixture.root).validate(candidate) }
+        #expect(throws: SafetyPolicyError.self) { try SafetyPolicy(home: fixture.home).validate(candidate) }
     }
 
     @Test
@@ -58,11 +58,11 @@ struct SafetyPolicyTests {
 
     @Test func deniesUnknownScopeBeforeInspectingItsContents() throws {
         let fixture = try Fixture(); defer { fixture.remove() }
-        let folder = fixture.root.appending(path: "Documents")
+        let folder = fixture.home.appending(path: "Documents")
         try FileManager.default.createDirectory(at: folder.appending(path: ".git"), withIntermediateDirectories: true)
         let candidate = CleanupCandidate(url: folder, name: "Unknown", category: .cache, size: 1, risk: .low, reason: "Unsafe")
         do {
-            try SafetyPolicy(home: fixture.root).validate(candidate)
+            try SafetyPolicy(home: fixture.home).validate(candidate)
             Issue.record("Unknown scope must be denied")
         } catch {
             #expect(error.localizedDescription == "The path is outside DiskSage’s cleanup allowlist.")
@@ -89,12 +89,11 @@ struct SafetyPolicyTests {
     func rejectsSymlinkedAncestor() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let external = FileManager.default.temporaryDirectory
-            .appending(path: "DiskSage-external-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let external = URL(fileURLWithPath: "/private/tmp/DiskSage-external-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: external) }
         let build = external.appending(path: "build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
-        let link = fixture.root.appending(path: "linked-project")
+        let link = fixture.developer.appending(path: "linked-project")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
 
         let candidate = CleanupCandidate(
@@ -106,7 +105,7 @@ struct SafetyPolicyTests {
             reason: "Fixture"
         )
         #expect(throws: SafetyPolicyError.self) {
-            try policy.validate(candidate)
+            try SafetyPolicy(home: fixture.home).validate(candidate)
         }
     }
 
@@ -114,7 +113,7 @@ struct SafetyPolicyTests {
     func rejectsChangedIdentity() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let build = fixture.root.appending(path: "build", directoryHint: .isDirectory)
+        let build = fixture.developer.appending(path: "build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
 
         let candidate = CleanupCandidate(
@@ -127,21 +126,22 @@ struct SafetyPolicyTests {
             identity: FileIdentity(device: UInt64.max, inode: UInt64.max)
         )
         #expect(throws: SafetyPolicyError.self) {
-            try policy.validate(candidate)
+            try SafetyPolicy(home: fixture.home).validate(candidate)
         }
     }
 
     private struct Fixture {
-        let root: URL
+        let home: URL
+        let developer: URL
 
         init() throws {
-            root = FileManager.default.homeDirectoryForCurrentUser
-                .appending(path: "Developer/.disksage-test-\(UUID().uuidString)", directoryHint: .isDirectory)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            home = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+            developer = home.appending(path: "Developer/fixture", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: developer, withIntermediateDirectories: true)
         }
 
         func remove() {
-            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: home)
         }
     }
 }

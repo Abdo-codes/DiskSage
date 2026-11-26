@@ -4,8 +4,9 @@ import Testing
 
 struct DiskScannerTests {
     @Test func everyScannedCandidatePassesDeletionPolicy() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-scanner-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/scanner-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let paths = [root.appending(path: "Project/.build", directoryHint: .isDirectory), root.appending(path: "Other/build", directoryHint: .isDirectory), root.appending(path: "Unrecognized", directoryHint: .isDirectory)]
         for path in paths {
             try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
@@ -15,14 +16,15 @@ struct DiskScannerTests {
             DiskScanner.Location(url: $0, name: $0.lastPathComponent, category: .build, risk: .low,
                                  reason: "Generated fixture", deletionMode: .item)
         }
-        let candidates = try await DiskScanner(locations: locations).scan()
+        let candidates = try await DiskScanner(locations: locations, home: fakeHome).scan()
         #expect(Set(candidates.map(\.url)) == Set(paths.prefix(2)))
-        for candidate in candidates { try SafetyPolicy().validate(candidate) }
+        for candidate in candidates { try SafetyPolicy(home: fakeHome).validate(candidate) }
     }
 
     @Test func generatedRootAboveTheInventoryLimitIsReportedAndNotOffered() async throws {
-        let base = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-limit-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: base) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let base = fakeHome.appending(path: "Developer/limit-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let small = base.appending(path: "Small/.build", directoryHint: .isDirectory)
         let large = base.appending(path: "Large/.build", directoryHint: .isDirectory)
         for (root, count) in [(small, 1), (large, 5)] {
@@ -32,7 +34,7 @@ struct DiskScannerTests {
         let locations = [(small, "Small build"), (large, "Large build")].map {
             DiskScanner.Location(url: $0.0, name: $0.1, category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles)
         }
-        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4).report()
+        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4, home: fakeHome).report()
         #expect(report.candidates.isEmpty)
         #expect(report.warnings == ["Large build was skipped. \(InventoryLimitExceeded(limit: 4).localizedDescription)"])
     }
@@ -55,8 +57,9 @@ struct DiskScannerTests {
     }
 
     @Test func parallelSeedInspectionPreservesDeterministicOrderDeduplicationAndWarnings() async throws {
-        let base = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-parallel-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: base) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let base = fakeHome.appending(path: "Developer/parallel-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let zeta = base.appending(path: "Zeta/.build", directoryHint: .isDirectory)
         let alpha = base.appending(path: "Alpha/.build", directoryHint: .isDirectory)
         let overflowA = base.appending(path: "OverflowA/.build", directoryHint: .isDirectory)
@@ -77,7 +80,7 @@ struct DiskScannerTests {
             DiskScanner.Location(url: overflowA, name: "Overflow A", category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles),
             DiskScanner.Location(url: overflowB, name: "Overflow B", category: .build, risk: .low, reason: "Fixture", deletionMode: .generatedFiles),
         ]
-        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4, maxConcurrency: 4).report()
+        let report = try await DiskScanner(locations: locations, activity: { .idle }, inventoryLimit: 4, maxConcurrency: 4, home: fakeHome).report()
         // Equal-sized candidates tie-break deterministically by path (Alpha before Zeta).
         #expect(report.candidates.map(\.name) == ["Alpha", "Zeta"])
         // Warnings preserve deterministic seed order regardless of task completion order.

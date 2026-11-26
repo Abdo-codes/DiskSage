@@ -171,4 +171,118 @@ struct ProjectCacheTests {
         #expect(onlyInner.map(\.url) == [CleanupPath.fileURL(inner.appending(path: "node_modules"))])
         try ProjectCacheInventory.verifyBeforeDeletion(innerCache, activity: .idle, now: laterNow, home: f.base)
     }
+
+    @Test func uncommittedTrackedEditsAndStagedIndexBlockCleanupAndCustomSkipExcludesDiscovery() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let git = WorktreeGitProcess()
+        let app = f.base.appending(path: "Developer/active-work")
+        try initGitProject(at: app, gitignore: "node_modules/\n")
+        try f.write("Developer/active-work/package.json", bytes: 64)
+        let tracked = try f.write("Developer/active-work/src/index.js", bytes: 32)
+        _ = try git.run(app.path, ["add", "package.json", "src/index.js"])
+        _ = try git.run(app.path, ["commit", "-m", "Add source"])
+        try f.write("Developer/active-work/node_modules/pkg/index.js", bytes: 8_192)
+
+        // Quiet at 30h normally.
+        let quietNow = f.later(hours: 30)
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1).count == 1)
+
+        // Uncommitted modification to a tracked file (mtime 28h) keeps project active at 30h even if logs/HEAD is old.
+        try Data("console.log('wip');\n".utf8).write(to: tracked)
+        try FileManager.default.setAttributes([.modificationDate: f.later(hours: 28)], ofItemAtPath: tracked.path)
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1).isEmpty)
+        let diag = PathDiagnostics.explain(CleanupPath.fileURL(app.appending(path: "node_modules")).path,
+                                           activity: .idle, now: quietNow, home: f.base, git: git, minimumProjectBytes: 1)
+        #expect(diag.verdict == .skipped)
+        #expect(diag.reasons.contains { $0.contains("quiet period") })
+
+        // Revert tracked edit, backdate git metadata to start, then stage a new file so only .git/index is recent (28h).
+        _ = try git.run(app.path, ["checkout", "--", "src/index.js"])
+        let indexPath = app.appending(path: ".git/index").path
+        try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: app.appending(path: ".git/logs/HEAD").path)
+        try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: app.appending(path: ".git/HEAD").path)
+        try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: indexPath)
+        let staged = try f.write("Developer/active-work/src/staged.js", bytes: 16)
+        _ = try git.run(app.path, ["add", "src/staged.js"])
+        try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: staged.path)
+        try FileManager.default.setAttributes([.modificationDate: f.later(hours: 28)], ofItemAtPath: indexPath)
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1).isEmpty)
+
+        // Custom skip rule excludes entire directory subtrees during Git project discovery.
+        let skippedRepo = f.base.appending(path: "Developer/archived/old-app")
+        try initGitProject(at: skippedRepo, gitignore: "node_modules/\n")
+        try f.write("Developer/archived/old-app/node_modules/pkg/index.js", bytes: 8_192)
+        var customRules = ProjectCacheRules.default
+        customRules.skip.insert("archived")
+        let discovery = ProjectCacheInventory.discoverGitProjects(
+            under: [f.base.appending(path: "Developer")], skip: customRules.skip, git: git
+        )
+        #expect(!discovery.projects.contains(CleanupPath.fileURL(skippedRepo)))
+
+        // Reset clean state and verify projectLastActivity works from a subdirectory (`../.git/HEAD`)
+        // and detects unstaged removal of a nested tracked directory (`rm -rf` ancestor unlink mtime).
+        _ = try git.run(app.path, ["reset", "--hard"])
+        _ = try git.run(app.path, ["clean", "-fd"])
+        try f.write("Developer/active-work/nested/deep/file.js", bytes: 16)
+        _ = try git.run(app.path, ["add", "nested/deep/file.js"])
+        _ = try git.run(app.path, ["commit", "-m", "Add nested file"])
+        for meta in [".git/logs/HEAD", ".git/HEAD", ".git/index"] {
+            try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: app.appending(path: meta).path)
+        }
+        let subdir = app.appending(path: "src")
+        let subdirQuiet = try #require(ProjectCacheInventory.projectLastActivity(
+            root: subdir,
+            claudeDir: f.base.appending(path: ".claude/projects"),
+            claudeFolders: [],
+            now: quietNow,
+            git: git
+        ))
+        #expect(abs(subdirQuiet.timeIntervalSince(f.start)) < 0.01)
+
+        try FileManager.default.removeItem(at: app.appending(path: "nested"))
+        try FileManager.default.setAttributes([.modificationDate: f.later(hours: 29)], ofItemAtPath: app.path)
+        let afterRemovedSubdir = try #require(ProjectCacheInventory.projectLastActivity(
+            root: subdir,
+            claudeDir: f.base.appending(path: ".claude/projects"),
+            claudeFolders: [],
+            now: quietNow,
+            git: git
+        ))
+        #expect(abs(afterRemovedSubdir.timeIntervalSince(f.later(hours: 29))) < 0.01)
+    }
+
+    @Test func refusesReposWithConfiguredGitCleanFiltersWithoutExecutingThem() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let git = WorktreeGitProcess()
+        let app = f.base.appending(path: "Developer/filtered-app")
+        try initGitProject(at: app, gitignore: "node_modules/\n")
+        try Data("*.js filter=fixture\n".utf8).write(to: app.appending(path: ".gitattributes"))
+        try f.write("Developer/filtered-app/package.json", bytes: 64)
+        let tracked = try f.write("Developer/filtered-app/src/index.js", bytes: 32)
+        _ = try git.run(app.path, ["add", ".gitattributes", "package.json", "src/index.js"])
+        _ = try git.run(app.path, ["commit", "-m", "Add filtered source"])
+        try f.write("Developer/filtered-app/node_modules/pkg/index.js", bytes: 8_192)
+
+        let marker = f.base.appending(path: "clean-filter-ran")
+        _ = try git.run(app.path, ["config", "filter.fixture.clean", "touch '\(marker.path)'"])
+
+        // Touch a tracked file matching .gitattributes so an unguarded `git status` would invoke the clean filter.
+        try Data("console.log('dirty');\n".utf8).write(to: tracked)
+        for path in [
+            tracked.path,
+            app.appending(path: ".git/logs/HEAD").path,
+            app.appending(path: ".git/HEAD").path,
+            app.appending(path: ".git/index").path,
+            app.appending(path: "node_modules").path,
+        ] {
+            try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: path)
+        }
+
+        let quietNow = f.later(hours: 30)
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1).isEmpty)
+        let diag = PathDiagnostics.explain(CleanupPath.fileURL(app.appending(path: "node_modules")).path,
+                                           activity: .idle, now: quietNow, home: f.base, git: git, minimumProjectBytes: 1)
+        #expect(diag.verdict == .skipped)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
 }

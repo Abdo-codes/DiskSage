@@ -92,17 +92,17 @@ struct ScheduledFolderPolicyTests {
     }
 
     @Test func lowRiskScheduleKeepsRecentAndUnrecognizedFiles() throws {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appending(path: "Developer/.disksage-schedule-test-\(UUID())", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let home = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = home.appending(path: "Developer/schedule-test", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: home) }
         let folder = root.appending(path: ".build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder.appending(path: "debug"), withIntermediateDirectories: true)
         try Data("recent".utf8).write(to: folder.appending(path: "debug/recent.o"))
         try Data("evidence".utf8).write(to: folder.appending(path: "run.log"))
-        let value = CleanupSchedule(folder: folder, folderIdentity: try ScheduledFolderPolicy.identity(of: folder))
-        #expect(try ScheduledFolderPolicy.scan(value, activity: { .idle }).isEmpty)
+        let value = CleanupSchedule(folder: folder, folderIdentity: try ScheduledFolderPolicy.identity(of: folder, home: home))
+        #expect(try ScheduledFolderPolicy.scan(value, home: home, activity: { .idle }).isEmpty)
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "run.log").path))
         let unknown = home.appending(path: "Library/Caches/UnknownApp")
-        #expect(throws: FeatureFailure.self) { try ScheduledFolderPolicy.lowRiskCategory(unknown) }
+        #expect(throws: FeatureFailure.self) { try ScheduledFolderPolicy.lowRiskCategory(unknown, home: home) }
     }
 }

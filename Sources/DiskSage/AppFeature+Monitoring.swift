@@ -27,6 +27,7 @@ extension AppFeature {
                 state.operationID = nil
             }
             state.automaticCheckID = nil
+            state.lastAutomaticCheckReason = nil
             return .merge(.cancel(id: CancelID.monitor), .cancel(id: CancelID.monitorCheck))
         case .monitorTick:
             guard state.automaticCheckID == nil else { return .none }
@@ -41,21 +42,40 @@ extension AppFeature {
             }.cancellable(id: CancelID.monitorCheck)
         case let .capacityRead(id, revision, wasBusy, available):
             guard state.automaticCheckID == id else { return .none }
-            state.freeSpaceBytes = available
+            if let available {
+                state.freeSpaceBytes = available
+                if let usage = state.diskUsage {
+                    state.diskUsage = DiskUsageSnapshot(name: usage.name, totalBytes: usage.totalBytes, availableBytes: available)
+                }
+            }
             let preferences = client.preferences()
             let threshold = Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024
             // A recovered disk resets the cooldown so the next threshold crossing
             // is handled immediately, even if the previous cleanup was recent.
-            if available > threshold { state.automaticRetryAfter = nil }
+            if let available, available > threshold { state.automaticRetryAfter = nil }
             let coolingDown = state.automaticRetryAfter.map { now < $0 } ?? false
-            let eligible = preferences.automaticEnabled && !wasBusy && !state.isBusy &&
-                revision == state.activityRevision && available <= threshold && !coolingDown
+            let eligible: Bool
+            if let available {
+                eligible = preferences.automaticEnabled && !wasBusy && !state.isBusy &&
+                    revision == state.activityRevision && available <= threshold && !coolingDown
+            } else {
+                eligible = false
+            }
             let reason: String
             if !preferences.automaticEnabled { reason = "Automatic cleanup is disabled." }
             else if wasBusy || state.isBusy || revision != state.activityRevision { reason = "Skipped because another operation is active or user activity changed." }
-            else if available > threshold { reason = "Free space is above the \(preferences.thresholdGiB) GiB threshold." }
-            else if coolingDown { reason = "Free space is low; waiting for the 15-minute automatic cleanup retry cooldown." }
-            else { reason = "Free space is at or below the \(preferences.thresholdGiB) GiB threshold; starting a scan for low-risk items." }
+            else if let available {
+                if available > threshold { reason = "Free space is above the \(preferences.thresholdGiB) GiB threshold." }
+                else if coolingDown { reason = "Free space is low; waiting for the 15-minute automatic cleanup retry cooldown." }
+                else { reason = "Free space is at or below the \(preferences.thresholdGiB) GiB threshold; starting a scan for low-risk items." }
+            } else {
+                reason = "Available disk space could not be read; automatic cleanup skipped."
+            }
+            let shouldLog = eligible || state.lastAutomaticCheckReason != reason
+            if !shouldLog {
+                state.automaticCheckID = nil
+                return state.diskUsage == nil ? refreshDashboard(state: &state) : .none
+            }
             if eligible {
                 // Reserve the shared operation while its mandatory check log is being persisted.
                 state.operation = .automaticScan
@@ -67,13 +87,13 @@ extension AppFeature {
                 do {
                     try await client.logCheck(event)
                     guard !Task.isCancelled else { return }
-                    await send(.automaticCheckLogged(id, eligible, nil))
+                    await send(.automaticCheckLogged(id, eligible, reason, nil))
                 } catch {
                     guard !Task.isCancelled else { return }
-                    await send(.automaticCheckLogged(id, eligible, FeatureFailure(message: error.localizedDescription)))
+                    await send(.automaticCheckLogged(id, eligible, reason, FeatureFailure(message: error.localizedDescription)))
                 }
             }.cancellable(id: CancelID.monitorCheck)
-        case let .automaticCheckLogged(id, reserved, error):
+        case let .automaticCheckLogged(id, reserved, reason, error):
             guard state.automaticCheckID == id else { return .none }
             state.automaticCheckID = nil
             let ownsReservation = reserved && state.operation == .automaticScan && state.operationID == id
@@ -82,17 +102,19 @@ extension AppFeature {
                 state.errorMessage = "Automatic cleanup check could not be logged: \(error.message)"
                 return .none
             }
+            state.lastAutomaticCheckReason = reason
             if ownsReservation {
                 let preferences = client.preferences()
                 guard preferences.automaticEnabled,
-                      client.freeSpace() <= Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024 else {
+                      let available = client.freeSpace(),
+                      available <= Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024 else {
                     state.operation = .idle
                     state.operationID = nil
-                    return refreshDashboard(state: &state)
+                    return state.diskUsage == nil ? refreshDashboard(state: &state) : .none
                 }
                 return beginScan(state: &state, purpose: .automatic, reservedID: id)
             }
-            return refreshDashboard(state: &state)
+            return state.diskUsage == nil ? refreshDashboard(state: &state) : .none
         default: return .none
         }
     }

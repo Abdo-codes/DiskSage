@@ -26,9 +26,10 @@ struct AppFeatureMonitoringRaceTests {
             }
         }
         capacity.continuation.yield(100)
+        let skipped = "Skipped because another operation is active or user activity changed."
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, 100)) { $0.freeSpaceBytes = 100 }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, nil)) {
-            $0.automaticCheckID = nil; $0.dashboardRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, skipped, nil)) {
+            $0.automaticCheckID = nil; $0.lastAutomaticCheckReason = skipped; $0.dashboardRevision = 1
         }
         await store.receive(.dashboardLoaded(1, DashboardSnapshot()))
         #expect(checks.value.first?.message?.contains("Skipped") == true)
@@ -58,9 +59,10 @@ struct AppFeatureMonitoringRaceTests {
             $0.statusMessage = "Deleted 1 item(s) · \(Int64(4096).diskSize) estimated"
         }
         capacity.continuation.yield(100)
+        let skipped = "Skipped because another operation is active or user activity changed."
         await store.receive(.capacityRead(FeatureTestSupport.id(1), 1, true, 100)) { $0.freeSpaceBytes = 100 }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), false, nil)) {
-            $0.automaticCheckID = nil; $0.dashboardRevision = 2
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), false, skipped, nil)) {
+            $0.automaticCheckID = nil; $0.lastAutomaticCheckReason = skipped; $0.dashboardRevision = 2
         }
         await store.receive(.dashboardLoaded(2, DashboardSnapshot()))
         await store.finish()

@@ -34,7 +34,7 @@ final class MCPServer {
             return encode(result([
                 "protocolVersion": versions.contains(requested) ? requested : versions[0],
                 "capabilities": ["tools": [String: Any]()],
-                "serverInfo": ["name": "DiskSage", "version": "0.3.0"],
+                "serverInfo": ["name": "DiskSage", "version": AppInformation().version ?? AppInformation().displayVersion],
                 "instructions": "Open DiskSage first. Use a new UUID request_id for every mutation or job; reuse only for an identical retry. Poll get_job for work or human approval. Review candidate IDs before requesting deletion; sensitive deletion, custom folder authorization and settings changes require in-app approval. Read schedules before editing their revisions. Schedules run while DiskSage is open."
             ], id: id))
         }

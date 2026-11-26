@@ -6,17 +6,18 @@ import Testing
 @MainActor
 struct ScheduleToolSocketTests {
     @Test func mcpCreatesEditsPausesAndRemovesTheSameSchedulesExposedByTheApp() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-mcp-schedules-\(UUID())")
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/mcp-schedules")
         let socketRoot = URL(fileURLWithPath: "/private/tmp/disksage-mcp-schedules-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: socketRoot) }
+        defer { try? FileManager.default.removeItem(at: fakeHome); try? FileManager.default.removeItem(at: socketRoot) }
         let folder = root.appending(path: ".build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("Do not delete this fixture".utf8).write(to: folder.appending(path: "artifact"))
         let repository = CleanupScheduleRepository(fileURL: root.appending(path: "settings/schedules.json"))
         let store = ManagementTestSupport.store(ManagementTestSupport.initial()) {
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
-            $0.management.identity = { try ScheduledFolderPolicy.identity(of: $0) }
-            $0.schedules.validate = { try ScheduledFolderPolicy.validate($0) }
+            $0.management.identity = { try ScheduledFolderPolicy.identity(of: $0, home: fakeHome) }
+            $0.schedules.validate = { try ScheduledFolderPolicy.validate($0, home: fakeHome) }
             $0.management.receipt = { id in try repository.receipts().first { $0.request.requestID == id } }
             $0.management.save = { try repository.save($0, receipt: $1) }
         }

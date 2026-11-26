@@ -6,6 +6,11 @@ import Foundation
 /// Git repositories, no protected `refuseInside` entry exists, no running process uses it,
 /// and both the project and cache have been quiet for at least `rules.quietHours`.
 enum ProjectCacheInventory {
+    struct ScanResult: Sendable {
+        var candidates: [CleanupCandidate] = []
+        var warnings: [String] = []
+    }
+
     static let defaultMinimumBytes: Int64 = 10 * 1_048_576
     static let discoveryDepthLimit = 5
     static let discoveryDirectoryLimit = 100_000
@@ -44,23 +49,43 @@ enum ProjectCacheInventory {
                            claudeProjectsDirectory: URL? = nil,
                            miseEnv: MiseProjectDiscovery.Environment? = nil,
                            git: WorktreeGitProcess = WorktreeGitProcess()) -> [CleanupCandidate] {
+        scan(activity: activity, now: now, home: home, roots: roots, rules: rules,
+             minimumBytes: minimumBytes, claudeProjectsDirectory: claudeProjectsDirectory,
+             miseEnv: miseEnv, git: git).candidates
+    }
+
+    /// Scans allowed project discovery roots and collects any directory-limit warnings alongside candidates.
+    static func scan(activity: CleanupActivity, now: Date = Date(),
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                     roots: [URL]? = nil,
+                     rules: ProjectCacheRules? = nil,
+                     minimumBytes: Int64 = defaultMinimumBytes,
+                     claudeProjectsDirectory: URL? = nil,
+                     miseEnv: MiseProjectDiscovery.Environment? = nil,
+                     git: WorktreeGitProcess = WorktreeGitProcess()) -> ScanResult {
         let activeRules = rules ?? ProjectCacheRulesLoader.current(home: home)
         let searchRoots = (roots ?? discoveryRoots(home: home, miseEnv: miseEnv)).map(CleanupPath.fileURL)
-        let projectRoots = discoverGitProjects(under: searchRoots, git: git)
+        let discovery = discoverGitProjects(under: searchRoots, skip: activeRules.skip, git: git)
         let claudeDir = claudeProjectsDirectory ?? defaultClaudeProjectsDirectory(home: home)
         let claudeFolders = listSubdirectories(claudeDir)
-        var results: [CleanupCandidate] = []
+        var result = ScanResult()
+        for limitedRoot in discovery.limitReachedRoots {
+            result.warnings.append("Project cache discovery in \(displayPath(limitedRoot, home: home)) stopped at its directory limit. Some projects were not checked.")
+        }
         var seen = Set<String>()
-        for project in projectRoots {
+        for project in discovery.projects {
             guard !Task.isCancelled else { break }
-            let found = scanProject(project, activity: activity, now: now, home: home, rules: activeRules,
-                                    minimumBytes: minimumBytes, claudeDir: claudeDir,
-                                    claudeFolders: claudeFolders, git: git)
-            for candidate in found where seen.insert(candidate.url.path).inserted {
-                results.append(candidate)
+            let projectResult = scanProjectResult(project, activity: activity, now: now, home: home, rules: activeRules,
+                                                  minimumBytes: minimumBytes, claudeDir: claudeDir,
+                                                  claudeFolders: claudeFolders, git: git)
+            if projectResult.limitReached {
+                result.warnings.append("Project cache scan in \(displayPath(project, home: home)) stopped at its directory limit. Some folders were not checked.")
+            }
+            for candidate in projectResult.candidates where seen.insert(candidate.url.path).inserted {
+                result.candidates.append(candidate)
             }
         }
-        return results
+        return result
     }
 
     /// Scans one Git project root for disposable caches.
@@ -71,11 +96,22 @@ enum ProjectCacheInventory {
                             claudeDir: URL? = nil,
                             claudeFolders: [String]? = nil,
                             git: WorktreeGitProcess = WorktreeGitProcess()) -> [CleanupCandidate] {
+        scanProjectResult(projectRoot, activity: activity, now: now, home: home, rules: rules,
+                          minimumBytes: minimumBytes, claudeDir: claudeDir, claudeFolders: claudeFolders,
+                          git: git).candidates
+    }
+
+    private static func scanProjectResult(_ projectRoot: URL, activity: CleanupActivity, now: Date,
+                                          home: URL, rules: ProjectCacheRules,
+                                          minimumBytes: Int64,
+                                          claudeDir: URL?,
+                                          claudeFolders: [String]?,
+                                          git: WorktreeGitProcess) -> (candidates: [CleanupCandidate], limitReached: Bool) {
         let root = CleanupPath.fileURL(projectRoot)
         guard TemporaryBuildOutput.isRealDirectory(root),
-              let defaultRepo = gitWorkTreeTopLevel(for: root, git: git) else { return [] }
-        let (matched, nestedRepos) = walkProject(root: root, rules: rules)
-        guard !matched.isEmpty else { return [] }
+              let defaultRepo = gitWorkTreeTopLevel(for: root, git: git) else { return ([], false) }
+        let (matched, nestedRepos, limitReached) = walkProject(root: root, rules: rules)
+        guard !matched.isEmpty else { return ([], limitReached) }
 
         let resolvedClaudeDir = claudeDir ?? defaultClaudeProjectsDirectory(home: home)
         let folders = claudeFolders ?? listSubdirectories(resolvedClaudeDir)
@@ -83,7 +119,7 @@ enum ProjectCacheInventory {
         func owningActivity(for repo: URL) -> Date? {
             if let cached = activityByRepo[repo.path] { return cached }
             let computed = projectLastActivity(root: repo, claudeDir: resolvedClaudeDir,
-                                               claudeFolders: folders, git: git)
+                                               claudeFolders: folders, now: now, git: git)
             activityByRepo[repo.path] = computed
             return computed
         }
@@ -112,7 +148,7 @@ enum ProjectCacheInventory {
             guard (try? SafetyPolicy(home: home, now: now).validate(candidate)) != nil else { continue }
             candidates.append(candidate)
         }
-        return candidates
+        return (candidates, limitReached)
     }
 
     /// Re-verifies every safety invariant right before `SecureFileDeleter` removes the cache directory.
@@ -142,7 +178,7 @@ enum ProjectCacheInventory {
         let claudeDir = claudeProjectsDirectory ?? defaultClaudeProjectsDirectory(home: home)
         let claudeFolders = listSubdirectories(claudeDir)
         guard let lastActivity = projectLastActivity(root: repoRoot, claudeDir: claudeDir,
-                                                     claudeFolders: claudeFolders, git: git),
+                                                     claudeFolders: claudeFolders, now: now, git: git),
               isQuiet(lastActivity: lastActivity, now: now, quietHours: activeRules.quietHours) else {
             throw FeatureFailure(message: "The project became active after the scan. Nothing was deleted.")
         }
@@ -158,7 +194,12 @@ enum ProjectCacheInventory {
     }
 
     static func discoverGitProjects(under roots: [URL], git: WorktreeGitProcess = WorktreeGitProcess()) -> [URL] {
-        var found: [URL] = [], seen = Set<String>()
+        discoverGitProjects(under: roots, skip: ProjectCacheRules.default.skip, git: git).projects
+    }
+
+    static func discoverGitProjects(under roots: [URL], skip: Set<String>,
+                                    git: WorktreeGitProcess = WorktreeGitProcess()) -> (projects: [URL], limitReachedRoots: [URL]) {
+        var found: [URL] = [], limitReachedRoots: [URL] = [], seen = Set<String>()
         for root in roots where TemporaryBuildOutput.isRealDirectory(root) {
             if hasGitEntry(root) || gitWorkTreeTopLevel(for: root, git: git) != nil {
                 if seen.insert(root.path).inserted { found.append(root) }
@@ -169,11 +210,14 @@ enum ProjectCacheInventory {
                 options: [.skipsPackageDescendants], errorHandler: { _, _ in true }) else { continue }
             var folders = 0
             for case let rawURL as URL in walker {
-                if Task.isCancelled { return found }
+                if Task.isCancelled { return (found.sorted { $0.path < $1.path }, limitReachedRoots) }
                 guard let values = try? rawURL.resourceValues(forKeys: keys),
                       values.isDirectory == true, values.isSymbolicLink != true else { continue }
                 folders += 1
-                if folders > discoveryDirectoryLimit { break }
+                if folders > discoveryDirectoryLimit {
+                    limitReachedRoots.append(root)
+                    break
+                }
                 let url = CleanupPath.fileURL(rawURL)
                 let depth = url.pathComponents.count - root.pathComponents.count
                 if depth > discoveryDepthLimit || !TemporaryBuildOutput.isRealDirectory(url) {
@@ -183,12 +227,12 @@ enum ProjectCacheInventory {
                     if seen.insert(url.path).inserted { found.append(url) }
                     walker.skipDescendants(); continue
                 }
-                if ProjectCacheRules.default.skip.contains(url.lastPathComponent) || url.lastPathComponent == "node_modules" {
+                if skip.contains(url.lastPathComponent) || url.lastPathComponent == "node_modules" {
                     walker.skipDescendants()
                 }
             }
         }
-        return found.sorted { $0.path < $1.path }
+        return (found.sorted { $0.path < $1.path }, limitReachedRoots)
     }
 
     static func encodeClaudeFolder(_ path: String) -> String {
@@ -198,19 +242,23 @@ enum ProjectCacheInventory {
         })
     }
 
-    private static func walkProject(root: URL, rules: ProjectCacheRules) -> ([(URL, ProjectCacheRules.Match)], [URL]) {
+    private static func walkProject(root: URL, rules: ProjectCacheRules) -> ([(URL, ProjectCacheRules.Match)], [URL], Bool) {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
         guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys),
-            options: [], errorHandler: { _, _ in true }) else { return ([], []) }
+            options: [], errorHandler: { _, _ in true }) else { return ([], [], false) }
         var matched: [(URL, ProjectCacheRules.Match)] = []
         var nestedRepos: [URL] = []
         var folders = 0
+        var limitReached = false
         for case let rawURL as URL in walker {
-            if Task.isCancelled { return ([], []) }
+            if Task.isCancelled { return ([], [], false) }
             guard let values = try? rawURL.resourceValues(forKeys: keys),
                   values.isDirectory == true, values.isSymbolicLink != true else { continue }
             folders += 1
-            if folders > projectWalkDirectoryLimit { break }
+            if folders > projectWalkDirectoryLimit {
+                limitReached = true
+                break
+            }
             let url = CleanupPath.fileURL(rawURL)
             guard TemporaryBuildOutput.isRealDirectory(url), url.path.hasPrefix(root.path + "/") else {
                 walker.skipDescendants(); continue
@@ -230,7 +278,7 @@ enum ProjectCacheInventory {
             }
             if hasGitEntry(url) { nestedRepos.append(url) }
         }
-        return (matched, nestedRepos)
+        return (matched, nestedRepos, limitReached)
     }
 
     private static func innermostRepo(for url: URL, root: URL, nestedRepos: [URL]) -> URL {
@@ -261,27 +309,88 @@ enum ProjectCacheInventory {
     }
 
     static func projectLastActivity(root: URL, claudeDir: URL, claudeFolders: [String],
+                                    now: Date = Date(),
                                     git: WorktreeGitProcess) -> Date? {
-        guard let output = try? git.text(root.path, ["rev-parse", "--show-toplevel", "--git-path", "logs/HEAD", "--git-path", "HEAD"]) else {
+        guard let output = try? git.text(root.path, ["rev-parse", "--show-toplevel", "--git-path", "logs/HEAD", "--git-path", "HEAD", "--git-path", "index"]) else {
             return nil
         }
         let lines = output.split(separator: "\n").map(String.init)
-        guard lines.count == 3 else { return nil }
+        guard lines.count == 4 else { return nil }
+        let repoTop = CleanupPath.fileURL(URL(fileURLWithPath: lines[0], isDirectory: true))
         var newest: Date?
         for candidate in lines.dropFirst() {
             let full = candidate.hasPrefix("/") ? candidate : root.appending(path: candidate).path
-            var info = stat()
-            if stat(full, &info) == 0 {
-                newest = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9)
-                break
+            if let mod = modifiedDate(atPath: full) {
+                newest = newest.map { max($0, mod) } ?? mod
             }
         }
         guard var latest = newest else { return nil }
+        guard (try? git.rejectHelpers(repoTop.path)) != nil,
+              let status = try? git.run(repoTop.path, ["status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=dirty"]) else {
+            return nil
+        }
+        if !status.data.isEmpty {
+            let fields = status.data.split(separator: 0, omittingEmptySubsequences: false)
+            var index = 0
+            var inspected = 0
+            while index < fields.count {
+                let field = fields[index]
+                index += 1
+                guard field.count >= 4 else { continue }
+                let xy = Array(field.prefix(2))
+                let relBytes = field.dropFirst(3)
+                if xy[0] == 82 || xy[0] == 67 || xy[1] == 82 || xy[1] == 67, index < fields.count {
+                    index += 1
+                }
+                inspected += 1
+                if inspected > 200 {
+                    latest = max(latest, now)
+                    break
+                }
+                let rel = String(decoding: relBytes, as: UTF8.self)
+                let target = repoTop.appending(path: rel)
+                let (mod, statError) = statModifiedDate(atPath: target.path)
+                if let mod {
+                    latest = max(latest, mod)
+                } else if statError == ENOENT {
+                    var ancestor = target.deletingLastPathComponent()
+                    var foundAncestorMod: Date?
+                    while ancestor.path == repoTop.path || ancestor.path.hasPrefix(repoTop.path + "/") {
+                        if let ancestorMod = modifiedDate(atPath: ancestor.path) {
+                            foundAncestorMod = ancestorMod
+                            break
+                        }
+                        let next = ancestor.deletingLastPathComponent()
+                        if next.path == ancestor.path { break }
+                        ancestor = next
+                    }
+                    latest = max(latest, foundAncestorMod ?? now)
+                } else {
+                    latest = max(latest, now)
+                }
+            }
+        }
         if let claudeTime = newestClaudeTranscript(for: root, claudeDir: claudeDir, claudeFolders: claudeFolders),
            claudeTime > latest {
             latest = claudeTime
         }
         return latest
+    }
+
+    private static func statModifiedDate(atPath path: String) -> (date: Date?, error: Int32) {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return (nil, errno) }
+        return (Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9), 0)
+    }
+
+    private static func modifiedDate(atPath path: String) -> Date? {
+        statModifiedDate(atPath: path).date
+    }
+
+    private static func displayPath(_ url: URL, home: URL) -> String {
+        let canonical = CleanupPath.fileURL(url).path
+        let canonicalHome = CleanupPath.fileURL(home).path
+        return canonical.hasPrefix(canonicalHome + "/") ? "~/" + canonical.dropFirst(canonicalHome.count + 1) : canonical
     }
 
     private static func newestClaudeTranscript(for root: URL, claudeDir: URL, claudeFolders: [String]) -> Date? {

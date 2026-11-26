@@ -132,13 +132,13 @@ struct SafetyPolicy: Sendable {
             home.appending(path: "Library/Developer/CoreSimulator/Devices", directoryHint: .isDirectory),
             home.appending(path: ".npm/_cacache", directoryHint: .isDirectory),
             URL(fileURLWithPath: "/private/var/tmp/_bazel_\(NSUserName())", isDirectory: true)
-        ].map(\.standardizedFileURL)
+        ].map(CleanupPath.fileURL)
 
 
         let cacheRoots = [
             home.appending(path: "Library/Caches", directoryHint: .isDirectory),
             home.appending(path: ".cache", directoryHint: .isDirectory)
-        ].map(\.standardizedFileURL)
+        ].map(CleanupPath.fileURL)
 
         let buildNames = Set([".build", "build", "DerivedData", "derived-data"])
         guard exactTargets.contains(url) || cacheRoots.contains(where: { url.deletingLastPathComponent() == $0 }) ||

@@ -31,16 +31,17 @@ struct LocalToolConnectionTests {
     }
 
     @MainActor @Test func mcpRequestDeletesOnlyAnAllowlistedFixtureAndLogsAgentTrigger() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-tool-e2e-\(UUID())")
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/tool-e2e")
         let socketRoot = URL(fileURLWithPath: "/private/tmp/disksage-mcp-\(UUID())")
         defer {
-            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: fakeHome)
             try? FileManager.default.removeItem(at: socketRoot)
         }
         let target = root.appending(path: ".build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data(repeating: 1, count: 4096).write(to: target.appending(path: "artifact"))
-        let candidate = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture"))
+        let candidate = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture", home: fakeHome))
         let logger = CleanupLogger(directory: root.appending(path: "logs"))
         let store = Store(initialState: AppFeature.State()) { AppFeature() } withDependencies: {
             $0.uuid = .incrementing
@@ -49,7 +50,7 @@ struct LocalToolConnectionTests {
             $0.diskSage.scan = { ScanReport(candidates: [candidate]) }
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
             $0.diskSage.cleanup = { targets, trigger, progress in
-                await CleanupService(logger: logger).delete(targets, trigger: trigger, progress: progress)
+                await CleanupService(logger: logger, home: fakeHome).delete(targets, trigger: trigger, progress: progress)
             }
         }
         let model = AppModel(store: store)
