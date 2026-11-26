@@ -3,13 +3,14 @@ import Foundation
 
 /// Explicit folder authorization is separate from the scanner's global allowlist.
 enum ScheduledFolderPolicy {
-    static func identity(of folder: URL, scope: CleanupSchedule.Scope = .folderContents) throws -> FileIdentity {
+    static func identity(of folder: URL, scope: CleanupSchedule.Scope = .folderContents,
+                         home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> FileIdentity {
         guard folder.isFileURL, folder.host == nil || folder.host == "localhost" else {
             throw FeatureFailure(message: "Choose a local folder.")
         }
         let url = CleanupPath.fileURL(folder)
         let path = url.path.lowercased()
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let home = CleanupPath.fileURL(home)
         let protected = ["/", "/Users", "/Volumes", "/private", "/private/tmp", "/private/var", "/tmp",
                          "/var", home.path, home.appending(path: "Developer").path,
                          home.appending(path: "Library").path]
@@ -63,29 +64,30 @@ enum ScheduledFolderPolicy {
                 }
             }
         }
-        guard try identity(of: schedule.folder, scope: schedule.scope) == schedule.folderIdentity else {
+        guard try identity(of: schedule.folder, scope: schedule.scope, home: home) == schedule.folderIdentity else {
             throw FeatureFailure(message: "The scheduled folder was replaced. Choose it again to authorize the new folder.")
         }
-        if schedule.scope == .lowRisk { _ = try lowRiskCategory(schedule.folder) }
+        if schedule.scope == .lowRisk { _ = try lowRiskCategory(schedule.folder, home: home) }
     }
 
-    static func lowRiskCategory(_ folder: URL) throws -> CandidateCategory {
-        guard let rule = GeneratedCleanupScope.rule(for: folder) else {
+    static func lowRiskCategory(_ folder: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> CandidateCategory {
+        guard let rule = GeneratedCleanupScope.rule(for: folder, home: home) else {
             throw FeatureFailure(message: "Choose a recognized generated-file folder, or explicitly authorize all folder contents.")
         }
         return rule == .buildArtifacts || rule == .goBuild ? .build : .cache
     }
 
     static func scan(_ schedule: CleanupSchedule,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser,
                      activity: GeneratedFileDeleter.Activity = { try CleanupActivity.capture() }) throws -> [CleanupCandidate] {
-        try validate(schedule)
-        let category: CandidateCategory = schedule.scope == .lowRisk ? try lowRiskCategory(schedule.folder) : .cache
+        try validate(schedule, home: home)
+        let category: CandidateCategory = schedule.scope == .lowRisk ? try lowRiskCategory(schedule.folder, home: home) : .cache
         let currentActivity = try activity()
         try currentActivity.requireIdle(schedule.folder)
         if schedule.scope == .lowRisk {
-            guard let rule = GeneratedCleanupScope.rule(for: schedule.folder),
+            guard let rule = GeneratedCleanupScope.rule(for: schedule.folder, home: home),
                   let target = try GeneratedFileDeleter.inspect(schedule.folder, name: schedule.folder.lastPathComponent,
-                    category: category, rule: rule, activity: currentActivity) else { return [] }
+                    category: category, rule: rule, activity: currentActivity, policy: SafetyPolicy(home: home)) else { return [] }
             return [target]
         }
         guard !Task.isCancelled else { throw CancellationError() }
@@ -103,8 +105,10 @@ enum ScheduledFolderPolicy {
     static func delete(_ schedule: CleanupSchedule, candidates: [CleanupCandidate],
                        repository: CleanupScheduleRepository = .standard,
                        logger: CleanupLogger = .shared,
+                       home: URL = FileManager.default.homeDirectoryForCurrentUser,
                        progress: @escaping @Sendable (CleanupProgress) async -> Void) async -> CleanupReport {
-        let service = CleanupService(logger: logger, remove: { candidate, removed in
+        let home = CleanupPath.fileURL(home)
+        let service = CleanupService(logger: logger, home: home, remove: { candidate, removed in
             guard let current = try repository.load().first(where: { $0.id == schedule.id }),
                   current.isEnabled, current.hasSameAuthorization(as: schedule),
                   current.revision == schedule.revision,
@@ -112,9 +116,9 @@ enum ScheduledFolderPolicy {
                   candidate.deletionMode == (schedule.scope == .lowRisk ? .generatedFiles : .contents), candidate.identity == schedule.folderIdentity else {
                 throw FeatureFailure(message: "The schedule was paused, removed, or its folder authorization changed.")
             }
-            try validate(current)
+            try validate(current, home: home)
             if current.scope == .lowRisk {
-                return try GeneratedFileDeleter.delete(candidate, entryRemoved: removed)
+                return try GeneratedFileDeleter.delete(candidate, policy: SafetyPolicy(home: home), entryRemoved: removed)
             }
             try CleanupActivity.capture().requireIdle(candidate.url)
             try SecureFileDeleter.delete(candidate, entryRemoved: removed)

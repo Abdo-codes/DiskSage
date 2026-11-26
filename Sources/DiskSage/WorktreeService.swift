@@ -168,7 +168,8 @@ struct WorktreeService: Sendable {
         do {
             try logger.append(CleanupLogEvent(runID: preview.id, trigger: preview.toolRequestID == nil ? .manual : .agent, event: .finished,
                 estimatedRemovedBytes: preview.items.filter { item in results.contains { $0.id == item.id && $0.succeeded } }.reduce(0) { $0 + $1.estimatedBytes },
-                actualRecoveredBytes: max(0, after - before), freeSpaceBefore: before, freeSpaceAfter: after,
+                actualRecoveredBytes: before.flatMap { start in after.map { max(0, $0 - start) } },
+                freeSpaceBefore: before, freeSpaceAfter: after,
                 candidateCount: preview.items.count, failedCount: preview.items.count - results.filter(\.succeeded).count))
         } catch { if !results.isEmpty { results[results.count - 1].message += " Summary logging failed: \(error.localizedDescription)" } }
         return results

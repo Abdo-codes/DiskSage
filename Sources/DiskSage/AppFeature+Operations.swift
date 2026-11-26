@@ -14,7 +14,7 @@ extension AppFeature {
             else { state.selection = Set(results.filter { $0.risk == .low }.map(\.id)) }
             state.recommendations = [:]
             state.recommendationSummary = ""
-            state.freeSpaceBytes = available
+            if let available { state.freeSpaceBytes = available }
             state.lastScanDate = now
             state.dashboardRevision += 1
             state.apply(dashboard)
@@ -25,7 +25,7 @@ extension AppFeature {
             case .review: return .none
             case .manualLowRisk: return requestLowRiskConfirmation(state: &state)
             case let .agent(job): return finishAgentScan(state: &state, jobID: job)
-            case .automatic: return finishAutomaticScan(state: &state)
+            case .automatic: return finishAutomaticScan(state: &state, available: available)
             }
         case let .scanWarned(id, warnings):
             // The scan finished, but some places were not checked. Show why, so a missing folder is never silent.
@@ -109,13 +109,17 @@ extension AppFeature {
         }
     }
 
-    func finishAutomaticScan(state: inout State) -> EffectOf<Self> {
+    func finishAutomaticScan(state: inout State, available: Int64?) -> EffectOf<Self> {
         let preferences = client.preferences()
         guard preferences.automaticEnabled else {
             state.statusMessage = "Automatic cleanup skipped: disabled in Settings."
             return .none
         }
-        guard state.freeSpaceBytes <= Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024 else {
+        guard let available else {
+            state.statusMessage = "Automatic cleanup skipped: available disk space could not be read."
+            return .none
+        }
+        guard available <= Int64(preferences.thresholdGiB) * 1_024 * 1_024 * 1_024 else {
             state.statusMessage = "Automatic cleanup skipped: free space is above the \(preferences.thresholdGiB) GiB threshold."
             return .none
         }

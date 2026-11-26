@@ -4,16 +4,17 @@ import Testing
 
 struct CleanupProgressDeliveryTests {
     @Test func slowProgressConsumerCannotBlockFileRemovalAndAllUpdatesDrainBeforeReturn() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-progress-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/progress-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let target = root.appending(path: ".build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data(repeating: 1, count: 4096).write(to: target.appending(path: "artifact"))
-        let candidate = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture"))
+        let candidate = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture", home: fakeHome))
         let gate = DeliveryGate()
         let logger = CleanupLogger(directory: root.appending(path: "logs"))
         let task = Task {
-            await CleanupService(logger: logger).delete([candidate]) { update in await gate.consume(update) }
+            await CleanupService(logger: logger, home: fakeHome).delete([candidate]) { update in await gate.consume(update) }
         }
         await gate.waitUntilStarted()
         // The UI consumer is suspended, but the filesystem worker must be able to finish.

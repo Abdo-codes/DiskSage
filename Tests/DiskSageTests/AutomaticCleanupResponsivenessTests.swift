@@ -25,11 +25,13 @@ struct AutomaticCleanupResponsivenessTests {
                 return report
             }
         }
+        let aboveMsg = "Free space is above the 15 GiB threshold."
+        let startMsg = "Free space is at or below the 15 GiB threshold; starting a scan for low-risk items."
         let monitoring = await store.send(.startMonitoring) { $0.isMonitoring = true }
         await store.receive(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, Self.highSpace)) { $0.freeSpaceBytes = Self.highSpace }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, nil)) {
-            $0.automaticCheckID = nil; $0.dashboardRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, aboveMsg, nil)) {
+            $0.automaticCheckID = nil; $0.lastAutomaticCheckReason = aboveMsg; $0.dashboardRevision = 1
         }
         await store.receive(.dashboardLoaded(1, DashboardSnapshot()))
         available.setValue(Self.lowSpace)
@@ -38,8 +40,8 @@ struct AutomaticCleanupResponsivenessTests {
         await store.receive(.capacityRead(FeatureTestSupport.id(1), 0, false, Self.lowSpace)) {
             $0.freeSpaceBytes = Self.lowSpace; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(1)
         }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), true, nil)) {
-            $0.automaticCheckID = nil; $0.activityRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), true, startMsg, nil)) {
+            $0.automaticCheckID = nil; $0.activityRevision = 1; $0.lastAutomaticCheckReason = startMsg
             $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
@@ -54,7 +56,7 @@ struct AutomaticCleanupResponsivenessTests {
             $0.statusMessage = "Deleted 1 item(s) · \(Int64(4096).diskSize) estimated"
             $0.lastAutomaticCleanup = FeatureTestSupport.epoch; $0.automaticCleanupSummary = $0.statusMessage
         }
-        await store.send(.stopMonitoring) { $0.isMonitoring = false }
+        await store.send(.stopMonitoring) { $0.isMonitoring = false; $0.lastAutomaticCheckReason = nil }
         await monitoring.finish()
         await store.finish()
     }
@@ -73,13 +75,15 @@ struct AutomaticCleanupResponsivenessTests {
             $0.diskSage.scan = { ScanReport(candidates: []) }
             $0.diskSage.logCheck = { event in checks.withValue { $0.append(event) } }
         }
+        let firstReason = recovered ? "Free space is above the 15 GiB threshold." : "Free space is low; waiting for the 15-minute automatic cleanup retry cooldown."
+        let startMsg = "Free space is at or below the 15 GiB threshold; starting a scan for low-risk items."
         await store.send(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, available.value)) {
             $0.freeSpaceBytes = available.value
             if recovered { $0.automaticRetryAfter = nil }
         }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, nil)) {
-            $0.automaticCheckID = nil; $0.dashboardRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, firstReason, nil)) {
+            $0.automaticCheckID = nil; $0.lastAutomaticCheckReason = firstReason; $0.dashboardRevision = 1
         }
         await store.receive(.dashboardLoaded(1, DashboardSnapshot()))
         #expect(checks.value.first?.message?.contains(recovered ? "above" : "cooldown") == true)
@@ -89,8 +93,8 @@ struct AutomaticCleanupResponsivenessTests {
         await store.receive(.capacityRead(FeatureTestSupport.id(1), 0, false, Self.lowSpace)) {
             $0.freeSpaceBytes = Self.lowSpace; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(1)
         }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), true, nil)) {
-            $0.automaticCheckID = nil; $0.activityRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(1), true, startMsg, nil)) {
+            $0.automaticCheckID = nil; $0.activityRevision = 1; $0.lastAutomaticCheckReason = startMsg
             $0.automaticRetryAfter = date.value.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }
@@ -105,11 +109,12 @@ struct AutomaticCleanupResponsivenessTests {
         var initial = AppFeature.State(); initial.isMonitoring = true
         initial.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
         let store = FeatureTestSupport.store(initial)
+        let disabledMsg = "Automatic cleanup is disabled."
         await store.send(.monitoringPreferencesChanged) { $0.automaticRetryAfter = nil }
         await store.receive(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, 100)) { $0.freeSpaceBytes = 100 }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, nil)) {
-            $0.automaticCheckID = nil; $0.dashboardRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), false, disabledMsg, nil)) {
+            $0.automaticCheckID = nil; $0.lastAutomaticCheckReason = disabledMsg; $0.dashboardRevision = 1
         }
         await store.receive(.dashboardLoaded(1, DashboardSnapshot()))
         await store.finish()

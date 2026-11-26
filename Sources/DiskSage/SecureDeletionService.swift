@@ -41,39 +41,41 @@ struct CleanupService: Sendable {
     let writeEvent: WriteEvent
 
     init(logger: CleanupLogger = .shared, maximumWorkers: Int = 4,
-         remove: @escaping Remove = { candidate, entryRemoved in
-             // Read the kind before the policy check. A folder that stops matching after the check,
-             // such as older device symbols whose newer version was deleted, still gets the full check and fails it.
-             let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url) != nil
-             let ecosystemCache = candidate.deletionMode == .contents && EcosystemCacheInventory.matching(candidate.url) != nil
-             try SafetyPolicy().validate(candidate)
-             if candidate.deletionMode == .generatedFiles {
-                 return try GeneratedFileDeleter.delete(candidate, entryRemoved: entryRemoved)
-             } else if candidate.deletionMode == .simulatorDevice {
-                 try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture())
-             } else if candidate.deletionMode == .simulatorRuntime {
-                 try SimulatorRuntimeInventory.delete(candidate, activity: try CleanupActivity.capture())
-             } else if candidate.deletionMode == .toolCommand {
-                 return try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture())
-             } else if candidate.deletionMode == .projectCache {
-                 let activity = try CleanupActivity.capture()
-                 try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: activity)
-                 try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
-             } else {
-                 let activity = try CleanupActivity.capture()
-                 try activity.requireIdle(candidate.url)
-                 if ecosystemCache || EcosystemCacheInventory.matching(candidate.url) != nil {
-                     try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: activity)
-                 } else if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url) != nil {
-                     try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity)
-                 }
-                 try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
-             }
-             return nil
-         }, writeEvent: WriteEvent? = nil) {
+         home: URL = FileManager.default.homeDirectoryForCurrentUser,
+         remove: Remove? = nil, writeEvent: WriteEvent? = nil) {
+        let home = CleanupPath.fileURL(home)
         self.logger = logger
         self.maximumWorkers = min(4, max(1, maximumWorkers))
-        self.remove = remove
+        self.remove = remove ?? { candidate, entryRemoved in
+            // Read the kind before the policy check. A folder that stops matching after the check,
+            // such as older device symbols whose newer version was deleted, still gets the full check and fails it.
+            let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url, home: home) != nil
+            let ecosystemCache = candidate.deletionMode == .contents && EcosystemCacheInventory.matching(candidate.url, home: home) != nil
+            try SafetyPolicy(home: home).validate(candidate)
+            if candidate.deletionMode == .generatedFiles {
+                return try GeneratedFileDeleter.delete(candidate, policy: SafetyPolicy(home: home), entryRemoved: entryRemoved)
+            } else if candidate.deletionMode == .simulatorDevice {
+                try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture(), home: home)
+            } else if candidate.deletionMode == .simulatorRuntime {
+                try SimulatorRuntimeInventory.delete(candidate, activity: try CleanupActivity.capture(), home: home)
+            } else if candidate.deletionMode == .toolCommand {
+                return try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture(), home: home)
+            } else if candidate.deletionMode == .projectCache {
+                let activity = try CleanupActivity.capture()
+                try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
+            } else {
+                let activity = try CleanupActivity.capture()
+                try activity.requireIdle(candidate.url)
+                if ecosystemCache || EcosystemCacheInventory.matching(candidate.url, home: home) != nil {
+                    try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                } else if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url, home: home) != nil {
+                    try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                }
+                try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
+            }
+            return nil
+        }
         self.writeEvent = writeEvent ?? { try logger.append($0) }
     }
 

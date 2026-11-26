@@ -28,21 +28,24 @@ struct DiskScanner: Sendable {
     private let activity: @Sendable () throws -> CleanupActivity
     private let inventoryLimit: Int
     private let maxConcurrency: Int
+    private let home: URL
     init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() },
-         inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries, maxConcurrency: Int = 4) {
+         inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries, maxConcurrency: Int = 4,
+         home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.locations = locations
         self.activity = activity
         self.inventoryLimit = inventoryLimit
         self.maxConcurrency = min(4, max(1, maxConcurrency))
+        self.home = CleanupPath.fileURL(home)
     }
 
     func scan() async throws -> [CleanupCandidate] { try await report().candidates }
 
     /// Throws when the activity check fails. An empty result means that the scan ran and found nothing.
     func report() async throws -> ScanReport {
-        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit, maxConcurrency] in
+        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit, maxConcurrency, home] in
             try await Self.scanConcurrently(locations: locations, activity: activity,
-                                            inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency)
+                                            inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency, home: home)
         }
         return try await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
@@ -58,14 +61,13 @@ struct DiskScanner: Sendable {
     }
 
     private static func scanConcurrently(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity,
-                                         inventoryLimit: Int, maxConcurrency: Int) async throws -> ScanReport {
+                                         inventoryLimit: Int, maxConcurrency: Int, home: URL) async throws -> ScanReport {
         guard !Task.isCancelled else { return ScanReport(candidates: []) }
         // A failed/incomplete activity check never turns into permission to delete. It is an error, not an empty disk.
         let currentActivity: CleanupActivity
         do { currentActivity = try activity() } catch {
             throw FeatureFailure(message: "The scan could not check which folders are in use: \(error.localizedDescription)")
         }
-        let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser)
         var seeds = locations ?? defaultLocations(home: home)
         var wholeFolders: [CleanupCandidate] = [], warnings: [String] = []
         if locations == nil {
@@ -89,7 +91,7 @@ struct DiskScanner: Sendable {
             if let candidate = result.candidate { candidates.append(candidate) }
             if let warning = result.warning { warnings.append(warning) }
         }
-        let offered = validated(candidates + wholeFolders)
+        let offered = validated(candidates + wholeFolders, home: home)
             .sorted { lhs, rhs in
                 if lhs.size != rhs.size { return lhs.size > rhs.size }
                 if lhs.url.path != rhs.url.path { return lhs.url.path < rhs.url.path }
@@ -116,7 +118,8 @@ struct DiskScanner: Sendable {
                                          generatedRoots: temporary.generatedRoots, warnings: discoveryWarnings)
             }
             group.addTask {
-                WholeFolderBranch(index: 1, candidates: ProjectCacheInventory.candidates(activity: activity, home: home))
+                let projectScan = ProjectCacheInventory.scan(activity: activity, home: home)
+                return WholeFolderBranch(index: 1, candidates: projectScan.candidates, warnings: projectScan.warnings)
             }
             group.addTask {
                 WholeFolderBranch(index: 2, candidates:
@@ -180,7 +183,7 @@ struct DiskScanner: Sendable {
             do {
                 // This scan also offers whole folders, so idle DerivedData projects go to that rule.
                 let candidate = try GeneratedFileDeleter.inspect(url, name: seed.name, category: seed.category, rule: rule,
-                    activity: activity, handsOffWholeFolders: true, maximumEntries: inventoryLimit)
+                    activity: activity, policy: SafetyPolicy(home: home), handsOffWholeFolders: true, maximumEntries: inventoryLimit)
                 return SeedResult(index: index, candidate: candidate, warning: nil)
             } catch let limit as InventoryLimitExceeded {
                 // Nothing is offered from a partial list, but the user must know why the folder is missing.
@@ -192,7 +195,7 @@ struct DiskScanner: Sendable {
         }
         guard !activity.contains(url) else { return SeedResult(index: index, candidate: nil, warning: nil) }
         let candidate = inspect(url, name: seed.name, category: seed.category, risk: seed.risk,
-                                reason: seed.reason, deletionMode: seed.deletionMode)
+                                reason: seed.reason, deletionMode: seed.deletionMode, home: home)
         return SeedResult(index: index, candidate: candidate, warning: nil)
     }
 
@@ -208,19 +211,21 @@ struct DiskScanner: Sendable {
         }
     }
 
-    static func validated(_ candidates: [CleanupCandidate]) -> [CleanupCandidate] {
+    static func validated(_ candidates: [CleanupCandidate],
+                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [CleanupCandidate] {
         guard !Task.isCancelled else { return [] }
-        return candidates.filter { (try? SafetyPolicy().validate($0)) != nil }
+        return candidates.filter { (try? SafetyPolicy(home: home).validate($0)) != nil }
     }
 
     /// Legacy explicit whole-folder operations retain their separate authorization path.
     static func inspect(_ url: URL, name: String, category: CandidateCategory, risk: RiskLevel,
-                        reason: String, deletionMode: DeletionMode = .item) -> CleanupCandidate? {
+                        reason: String, deletionMode: DeletionMode = .item,
+                        home: URL = FileManager.default.homeDirectoryForCurrentUser) -> CleanupCandidate? {
         guard !Task.isCancelled, FileManager.default.fileExists(atPath: url.path),
               !isSymbolicLink(url), !containsRunningExecutable(url), let identity = fileIdentity(of: url) else { return nil }
         let proposed = CleanupCandidate(url: url, name: name, category: category, size: 0,
             risk: risk, reason: reason, identity: identity, deletionMode: deletionMode)
-        guard (try? SafetyPolicy().validate(proposed)) != nil,
+        guard (try? SafetyPolicy(home: home).validate(proposed)) != nil,
               let size = allocatedSize(of: url), size > 0, !Task.isCancelled else { return nil }
         return CleanupCandidate(id: proposed.id, url: url, name: name, category: category, size: size,
             risk: risk, reason: reason, identity: identity, deletionMode: deletionMode)

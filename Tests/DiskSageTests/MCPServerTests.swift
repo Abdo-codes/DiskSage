@@ -14,6 +14,9 @@ struct MCPServerTests {
         let initialized = try response(server, method: "initialize", params: ["protocolVersion": "2025-06-18"])
         let info = try #require(initialized["result"] as? [String: Any])
         #expect(info["protocolVersion"] as? String == "2025-06-18")
+        let serverInfo = try #require(info["serverInfo"] as? [String: Any])
+        let expectedVersion = AppInformation().version ?? AppInformation().displayVersion
+        #expect(serverInfo["version"] as? String == expectedVersion)
         let listed = try response(server, method: "tools/list")
         let tools = try #require((listed["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         #expect(Set(["get_status", "scan", "clean_low_risk", "get_job"]).isSubset(of: Set(tools.compactMap { $0["name"] as? String })))

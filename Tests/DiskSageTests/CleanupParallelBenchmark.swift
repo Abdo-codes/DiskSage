@@ -5,8 +5,9 @@ import Testing
 struct CleanupParallelBenchmark {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DISKSAGE_PARALLEL_BENCHMARK"] == "1"))
     func compareOneTwoAndFourWorkersOnDisposableBuildTrees() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-benchmark-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/benchmark")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         var observations: [[String: Double]] = []
         for trial in 0..<3 {
             let order = [[1, 2, 4], [4, 1, 2], [2, 4, 1]][trial]
@@ -24,11 +25,11 @@ struct CleanupParallelBenchmark {
                         }
                     }
                     targets.append(try #require(DiskScanner.inspect(target, name: "Fixture", category: .build,
-                                                                   risk: .low, reason: "Benchmark fixture")))
+                                                                   risk: .low, reason: "Benchmark fixture", home: fakeHome)))
                 }
                 let start = ContinuousClock.now
                 let report = await CleanupService(logger: CleanupLogger(directory: runRoot.appending(path: "logs")),
-                    maximumWorkers: workers).delete(targets)
+                    maximumWorkers: workers, home: fakeHome).delete(targets)
                 let elapsed = start.duration(to: .now).components
                 let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
                 #expect(report.loggingError == nil && report.failures.isEmpty)

@@ -43,6 +43,7 @@ struct AppFeature {
         var isMonitoring = false
         var automaticCheckID: UUID?
         var automaticRetryAfter: Date?
+        var lastAutomaticCheckReason: String?
         var storageNotifications = DiskSpaceNotificationObserver.Status()
         var activityRevision = 0
         var dashboardRevision = 0
@@ -70,7 +71,7 @@ struct AppFeature {
     enum ScanPurpose: Equatable, Sendable { case review, manualLowRisk, agent(UUID), automatic }
     enum Action: Equatable, Sendable {
         case scanRequested(ScanPurpose)
-        case scanFinished(UUID, ScanPurpose, [CleanupCandidate], Int64, DashboardSnapshot)
+        case scanFinished(UUID, ScanPurpose, [CleanupCandidate], Int64?, DashboardSnapshot)
         case scanFailed(UUID, ScanPurpose, FeatureFailure)
         case scanWarned(UUID, [String])
         case advisorRequested(AgentConfiguration)
@@ -94,8 +95,8 @@ struct AppFeature {
         case monitorTick
         case monitoringPreferencesChanged
         case storageNotificationsChanged(DiskSpaceNotificationObserver.Status)
-        case capacityRead(UUID, Int, Bool, Int64)
-        case automaticCheckLogged(UUID, Bool, FeatureFailure?)
+        case capacityRead(UUID, Int, Bool, Int64?)
+        case automaticCheckLogged(UUID, Bool, String, FeatureFailure?)
         case openLogs
         case startScheduling
         case stopScheduling

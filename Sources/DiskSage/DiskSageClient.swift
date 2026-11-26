@@ -32,8 +32,8 @@ struct DiskSageClient: Sendable {
     var advise: AdvisorAction
     var cleanup: CleanupAction
     var dashboard: @Sendable () async -> DashboardSnapshot
-    var freeSpace: @Sendable () -> Int64
-    var capacity: @Sendable () async -> Int64
+    var freeSpace: @Sendable () -> Int64?
+    var capacity: @Sendable () async -> Int64?
     var preferences: @Sendable () -> CleanupPreferences
     var logCheck: @Sendable (CleanupLogEvent) async throws -> Void
     var openLogs: @Sendable () async -> String?
@@ -71,10 +71,10 @@ extension DiskSageClient: DependencyKey {
         preferences: { CleanupPreferences(automaticEnabled: false) },
         logCheck: { _ in }, openLogs: { nil })
 
-    static func availableSpace() -> Int64 {
+    static func availableSpace() -> Int64? {
         let values = try? URL(fileURLWithPath: "/System/Volumes/Data")
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values?.volumeAvailableCapacityForImportantUsage ?? 0
+        return values?.volumeAvailableCapacityForImportantUsage
     }
 }
 

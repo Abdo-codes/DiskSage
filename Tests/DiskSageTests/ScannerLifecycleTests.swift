@@ -5,30 +5,32 @@ import Testing
 
 struct ScannerLifecycleTests {
     @Test func scannerOffersAllowedFixtureButRejectsSymlinkedAncestor() throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-scan-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/scan-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let target = root.appending(path: "project/.build")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data(repeating: 1, count: 4096).write(to: target.appending(path: "artifact"))
-        let good = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture"))
-        try SafetyPolicy().validate(good)
+        let good = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture", home: fakeHome))
+        try SafetyPolicy(home: fakeHome).validate(good)
         #expect(good.size >= 4096)
         let link = root.appending(path: "link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target.deletingLastPathComponent())
-        #expect(DiskScanner.inspect(link.appending(path: ".build"), name: "Fixture", category: .build, risk: .low, reason: "Fixture") == nil)
+        #expect(DiskScanner.inspect(link.appending(path: ".build"), name: "Fixture", category: .build, risk: .low, reason: "Fixture", home: fakeHome) == nil)
     }
 
     @Test func changedTargetsAreDroppedBeforePublishingScanResults() throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Developer/.disksage-stale-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID())", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/stale-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let target = root.appending(path: ".build")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data(repeating: 1, count: 4096).write(to: target.appending(path: "artifact"))
-        let original = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture"))
-        #expect(DiskScanner.validated([original]).count == 1)
+        let original = try #require(DiskScanner.inspect(target, name: "Fixture", category: .build, risk: .low, reason: "Fixture", home: fakeHome))
+        #expect(DiskScanner.validated([original], home: fakeHome).count == 1)
         try FileManager.default.moveItem(at: target, to: root.appending(path: "old-build"))
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        #expect(DiskScanner.validated([original]).isEmpty)
+        #expect(DiskScanner.validated([original], home: fakeHome).isEmpty)
     }
 
     @Test func alreadyCancelledScanReturnsNoCandidates() async throws {

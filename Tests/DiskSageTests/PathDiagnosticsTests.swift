@@ -142,4 +142,91 @@ struct PathDiagnosticsTests {
         #expect(diag.verdict == .skipped)
         #expect(diag.matcher == "Claude session guard")
     }
+
+    @Test func explainsSimulatorRuntimeEligibilityAndSkipReasons() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let pUnusable = try f.folder("runtimes/unusable")
+        let pUnused = try f.folder("runtimes/unused")
+        let mUnused = try f.folder("mounts/unused")
+        let pUsed = try f.folder("runtimes/used")
+        let pRecent = try f.folder("runtimes/recent")
+        let pNonDeletable = try f.folder("runtimes/nondeletable")
+        let now = ISO8601DateFormatter().date(from: "2026-11-22T12:00:00Z")!
+        let oldDate = ISO8601DateFormatter().date(from: "2026-11-10T10:00:00Z")!
+        let recentDate = ISO8601DateFormatter().date(from: "2026-11-22T08:00:00Z")!
+
+        let runtimes = [
+            SimulatorRuntime(identifier: "11111111-AAAA-AAAA-AAAA-111111111111",
+                             runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2-old",
+                             platformIdentifier: "com.apple.platform.iphonesimulator",
+                             version: "27.2", build: "24B91016s", state: "Unusable", deletable: true,
+                             sizeBytes: 8_300_000_000, path: pUnusable.path, mountPath: nil,
+                             runtimeBundlePath: nil, lastUsedAt: recentDate),
+            SimulatorRuntime(identifier: "22222222-BBBB-BBBB-BBBB-222222222222",
+                             runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.watchOS-26-0",
+                             platformIdentifier: "com.apple.platform.watchsimulator",
+                             version: "26.0", build: "23S100", state: "Ready", deletable: true,
+                             sizeBytes: 3_800_000_000, path: pUnused.path, mountPath: mUnused.path,
+                             runtimeBundlePath: nil, lastUsedAt: oldDate),
+            SimulatorRuntime(identifier: "33333333-CCCC-CCCC-CCCC-333333333333",
+                             runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+                             platformIdentifier: "com.apple.platform.iphonesimulator",
+                             version: "27.2", build: "24B114", state: "Ready", deletable: true,
+                             sizeBytes: 8_300_000_000, path: pUsed.path, mountPath: nil,
+                             runtimeBundlePath: nil, lastUsedAt: oldDate),
+            SimulatorRuntime(identifier: "44444444-DDDD-DDDD-DDDD-444444444444",
+                             runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.tvOS-27-0",
+                             platformIdentifier: "com.apple.platform.appletvsimulator",
+                             version: "27.0", build: "24J10", state: "Ready", deletable: true,
+                             sizeBytes: 4_000_000_000, path: pRecent.path, mountPath: nil,
+                             runtimeBundlePath: nil, lastUsedAt: recentDate),
+            SimulatorRuntime(identifier: "55555555-EEEE-EEEE-EEEE-555555555555",
+                             runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.visionOS-27-0",
+                             platformIdentifier: "com.apple.platform.xrsimulator",
+                             version: "27.0", build: "24O10", state: "Ready", deletable: false,
+                             sizeBytes: 9_000_000_000, path: pNonDeletable.path, mountPath: nil,
+                             runtimeBundlePath: nil, lastUsedAt: oldDate),
+        ]
+        let devicesJSON = """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-2":[{"udid":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","name":"iPhone 17","state":"Shutdown","isAvailable":true}]}}
+        """
+        let simctl: SimulatorInventory.Run = { _ in (0, Data(devicesJSON.utf8)) }
+
+        let unusableDiag = PathDiagnostics.explain(pUnusable.path, activity: .idle, now: now, home: f.base,
+                                                   simctl: simctl, runtimes: runtimes)
+        #expect(unusableDiag.verdict == .eligible)
+        #expect(unusableDiag.risk == "medium")
+        #expect(unusableDiag.sizeBytes == 8_300_000_000)
+
+        let unusedDiag = PathDiagnostics.explain(pUnused.path, activity: .idle, now: now, home: f.base,
+                                                 simctl: simctl, runtimes: runtimes)
+        #expect(unusedDiag.verdict == .eligible)
+
+        let keptUnusedDiag = PathDiagnostics.explain(pUnused.path, activity: .idle, now: now, home: f.base,
+                                                     keep: KeepRules(simulatorNames: ["watchOS*"]),
+                                                     simctl: simctl, runtimes: runtimes)
+        #expect(keptUnusedDiag.verdict == .skipped)
+        #expect(keptUnusedDiag.reasons.contains { $0.contains("Keep rule") })
+
+        let usedDiag = PathDiagnostics.explain(pUsed.path, activity: .idle, now: now, home: f.base,
+                                               simctl: simctl, runtimes: runtimes)
+        #expect(usedDiag.verdict == .skipped)
+        #expect(usedDiag.reasons.contains { $0.contains("configured simulator device") })
+
+        let recentDiag = PathDiagnostics.explain(pRecent.path, activity: .idle, now: now, home: f.base,
+                                                 simctl: simctl, runtimes: runtimes)
+        #expect(recentDiag.verdict == .skipped)
+        #expect(recentDiag.reasons.contains { $0.contains("24 hours") })
+
+        let nonDeletableDiag = PathDiagnostics.explain(pNonDeletable.path, activity: .idle, now: now, home: f.base,
+                                                       simctl: simctl, runtimes: runtimes)
+        #expect(nonDeletableDiag.verdict == .skipped)
+        #expect(nonDeletableDiag.reasons.contains { $0.contains("non-deletable") })
+
+        let mountKeptDiag = PathDiagnostics.explain(mUnused.path, activity: .idle, now: now, home: f.base,
+                                                    keep: KeepRules(paths: [pUnused.path]),
+                                                    simctl: simctl, runtimes: runtimes)
+        #expect(mountKeptDiag.verdict == .skipped)
+        #expect(mountKeptDiag.reasons.contains { $0.contains("Keep rule") })
+    }
 }

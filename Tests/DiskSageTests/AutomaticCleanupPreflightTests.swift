@@ -20,12 +20,13 @@ struct AutomaticCleanupPreflightTests {
             $0.diskSage.freeSpace = { available.value }
             $0.diskSage.scan = { for await result in scan.stream { return ScanReport(candidates: result) }; return ScanReport(candidates: []) }
         }
+        let startMsg = "Free space is at or below the 15 GiB threshold; starting a scan for low-risk items."
         await store.send(.monitorTick) { $0.automaticCheckID = FeatureTestSupport.id(0) }
         await store.receive(.capacityRead(FeatureTestSupport.id(0), 0, false, initialSpace)) {
             $0.freeSpaceBytes = initialSpace; $0.operation = .automaticScan; $0.operationID = FeatureTestSupport.id(0)
         }
-        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), true, nil)) {
-            $0.automaticCheckID = nil; $0.activityRevision = 1
+        await store.receive(.automaticCheckLogged(FeatureTestSupport.id(0), true, startMsg, nil)) {
+            $0.automaticCheckID = nil; $0.activityRevision = 1; $0.lastAutomaticCheckReason = startMsg
             $0.automaticRetryAfter = FeatureTestSupport.epoch.addingTimeInterval(900)
             $0.statusMessage = "Low disk space detected; scanning low-risk items…"
         }

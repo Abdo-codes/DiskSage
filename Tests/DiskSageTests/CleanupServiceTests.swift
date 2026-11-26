@@ -6,9 +6,9 @@ import Testing
 struct CleanupServiceTests {
     @Test
     func reportsPartialSuccessAndContinuesAfterFailure() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Developer/.disksage-cleanup-test-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/cleanup-test", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let removable = root.appending(path: ".build", directoryHint: .isDirectory)
@@ -38,7 +38,7 @@ struct CleanupServiceTests {
 
         let logger = CleanupLogger(directory: root.appending(path: "logs"))
         let progress = ProgressRecorder()
-        let report = await CleanupService(logger: logger, maximumWorkers: 1).delete([bad, good], trigger: .automatic) { event in
+        let report = await CleanupService(logger: logger, maximumWorkers: 1, home: fakeHome).delete([bad, good], trigger: .automatic) { event in
             await progress.record(event)
         }
         let updates = await progress.updates

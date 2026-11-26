@@ -41,9 +41,9 @@ struct CleanupLoggerTests {
 
     @Test
     func refusesCleanupWhenLogCannotBeWritten() async throws {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Developer/.disksage-log-test-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        let root = fakeHome.appending(path: "Developer/log-test")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
         let target = root.appending(path: ".build")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try Data([1, 2, 3]).write(to: target.appending(path: "artifact"))
@@ -56,7 +56,7 @@ struct CleanupLoggerTests {
             identity: FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
         )
         let logger = CleanupLogger(directory: blocker.appending(path: "logs"))
-        let report = await CleanupService(logger: logger).delete([candidate])
+        let report = await CleanupService(logger: logger, home: fakeHome).delete([candidate])
         #expect(report.loggingError != nil)
         #expect(report.items.isEmpty)
         #expect(FileManager.default.fileExists(atPath: target.path))
@@ -76,6 +76,37 @@ struct CleanupLoggerTests {
         #expect(try logger.recentCleanups().first?.itemNames == ["Package cache"])
         try logger.append(CleanupLogEvent(runID: UUID(), trigger: .automatic, event: .check))
         #expect(try logger.recentCleanups().map(\.id) == [runID])
+    }
+
+    @Test
+    func recentCleanupsSkipsChecksCachesUnchangedFilesAndInvalidatesOnNewRunOrLargerLimit() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let logger = CleanupLogger(directory: directory)
+        for _ in 0..<250 {
+            try logger.append(CleanupLogEvent(runID: UUID(), trigger: .automatic, event: .check,
+                                              message: "Free space is above the 15 GiB threshold."))
+        }
+        let firstRun = UUID()
+        try logger.append(CleanupLogEvent(runID: firstRun, trigger: .manual, event: .started))
+        try logger.append(CleanupLogEvent(runID: firstRun, trigger: .manual, event: .itemStarted, path: "/cache/a", name: "Cache A"))
+        try logger.append(CleanupLogEvent(runID: firstRun, trigger: .manual, event: .itemFinished, path: "/cache/a", name: "Cache A", succeeded: true))
+        try logger.append(CleanupLogEvent(runID: firstRun, trigger: .manual, event: .finished, candidateCount: 1, failedCount: 0))
+
+        #expect(try logger.recentCleanups(limit: 1).map(\.id) == [firstRun])
+        #expect(try logger.recentCleanups(limit: 20).first?.itemNames == ["Cache A"])
+
+        let secondRun = UUID()
+        try logger.append(CleanupLogEvent(runID: secondRun, trigger: .automatic, event: .itemFinished,
+                                          path: "/cache/b", name: "Cache B", succeeded: true))
+        try logger.append(CleanupLogEvent(runID: secondRun, trigger: .automatic, event: .finished,
+                                          candidateCount: 1, failedCount: 0))
+
+        // Smaller cached limit must not truncate a subsequent larger limit request, and new runs invalidate the cache.
+        #expect(try logger.recentCleanups(limit: 1).map(\.id) == [secondRun])
+        let both = try logger.recentCleanups(limit: 20)
+        #expect(both.map(\.id) == [secondRun, firstRun])
+        #expect(both.first?.itemNames == ["Cache B"])
     }
 
     private func readEvents(_ logger: CleanupLogger) throws -> [CleanupLogEvent] {
