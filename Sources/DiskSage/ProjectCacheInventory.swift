@@ -325,7 +325,8 @@ enum ProjectCacheInventory {
             }
         }
         guard var latest = newest else { return nil }
-        guard let status = try? git.run(repoTop.path, ["status", "--porcelain=v1", "-z", "--untracked-files=no"]) else {
+        guard (try? git.rejectHelpers(repoTop.path)) != nil,
+              let status = try? git.run(repoTop.path, ["status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=dirty"]) else {
             return nil
         }
         if !status.data.isEmpty {

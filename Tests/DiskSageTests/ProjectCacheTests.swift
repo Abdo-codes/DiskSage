@@ -250,4 +250,39 @@ struct ProjectCacheTests {
         ))
         #expect(abs(afterRemovedSubdir.timeIntervalSince(f.later(hours: 29))) < 0.01)
     }
+
+    @Test func refusesReposWithConfiguredGitCleanFiltersWithoutExecutingThem() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let git = WorktreeGitProcess()
+        let app = f.base.appending(path: "Developer/filtered-app")
+        try initGitProject(at: app, gitignore: "node_modules/\n")
+        try Data("*.js filter=fixture\n".utf8).write(to: app.appending(path: ".gitattributes"))
+        try f.write("Developer/filtered-app/package.json", bytes: 64)
+        let tracked = try f.write("Developer/filtered-app/src/index.js", bytes: 32)
+        _ = try git.run(app.path, ["add", ".gitattributes", "package.json", "src/index.js"])
+        _ = try git.run(app.path, ["commit", "-m", "Add filtered source"])
+        try f.write("Developer/filtered-app/node_modules/pkg/index.js", bytes: 8_192)
+
+        let marker = f.base.appending(path: "clean-filter-ran")
+        _ = try git.run(app.path, ["config", "filter.fixture.clean", "touch '\(marker.path)'"])
+
+        // Touch a tracked file matching .gitattributes so an unguarded `git status` would invoke the clean filter.
+        try Data("console.log('dirty');\n".utf8).write(to: tracked)
+        for path in [
+            tracked.path,
+            app.appending(path: ".git/logs/HEAD").path,
+            app.appending(path: ".git/HEAD").path,
+            app.appending(path: ".git/index").path,
+            app.appending(path: "node_modules").path,
+        ] {
+            try FileManager.default.setAttributes([.modificationDate: f.start], ofItemAtPath: path)
+        }
+
+        let quietNow = f.later(hours: 30)
+        #expect(ProjectCacheInventory.candidates(activity: .idle, now: quietNow, home: f.base, minimumBytes: 1).isEmpty)
+        let diag = PathDiagnostics.explain(CleanupPath.fileURL(app.appending(path: "node_modules")).path,
+                                           activity: .idle, now: quietNow, home: f.base, git: git, minimumProjectBytes: 1)
+        #expect(diag.verdict == .skipped)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
 }
