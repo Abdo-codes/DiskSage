@@ -138,4 +138,19 @@ struct WorktreesFeatureTests {
         #expect(!store.dashboardPresentation.canCleanNow)
     }
 
+    @Test func suggestsDetectedAgentWorktreesUntilApprovedOrCovered() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let t3 = try f.folder(".t3/worktrees")
+        let codex = try f.folder(".codex/worktrees")
+
+        let initial = WorktreeReviewView.suggestedAgentRoots(home: f.base, approvedRoots: [])
+        #expect(initial.map(\.path) == [t3.path, codex.path])
+        #expect(initial.map(\.label) == ["~/.t3/worktrees", "~/.codex/worktrees"])
+
+        let afterT3 = WorktreeReviewView.suggestedAgentRoots(home: f.base, approvedRoots: [t3.path])
+        #expect(afterT3.map(\.path) == [codex.path])
+
+        let coveredByHome = WorktreeReviewView.suggestedAgentRoots(home: f.base, approvedRoots: [f.base.path])
+        #expect(coveredByHome.isEmpty)
+    }
 }

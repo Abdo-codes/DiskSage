@@ -99,8 +99,8 @@ struct SafetyPolicy: Sendable {
             try verifyIdentity(of: url, expected: candidate.identity)
             return
         }
-        if EcosystemCacheInventory.matching(url, home: home) != nil {
-            // Contents only: keep the cache directory itself and never follow symlinks or allow Git checkouts.
+        if let rule = EcosystemCacheInventory.matching(url, home: home) {
+            // Contents only: keep the cache directory itself and never follow symlinks or allow unverified Git checkouts.
             guard candidate.deletionMode == .contents, candidate.identity != FileIdentity(device: 0, inode: 0) else {
                 throw SafetyPolicyError.refused("Ecosystem caches remove only their contents.")
             }
@@ -109,8 +109,10 @@ struct SafetyPolicy: Sendable {
             }
             try rejectSymlinkedAncestors(of: url)
             try verifyIdentity(of: url, expected: candidate.identity)
-            do { try WorktreePathGuard.rejectSourceContainers(url) }
-            catch { throw SafetyPolicyError.refused(error.localizedDescription) }
+            if !rule.allowSwiftPMMirrors {
+                do { try WorktreePathGuard.rejectSourceContainers(url) }
+                catch { throw SafetyPolicyError.refused(error.localizedDescription) }
+            }
             return
         }
         if TemporaryBuildOutput.kind(of: url, home: home) != nil {

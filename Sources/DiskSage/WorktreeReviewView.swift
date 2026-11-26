@@ -43,6 +43,19 @@ struct WorktreeReviewView: View {
                     Toggle("Show primary checkouts", isOn: $showPrimary).font(.caption)
                 }.padding(.horizontal, 16).padding(.bottom, 10)
             }
+            let suggestions = Self.suggestedAgentRoots(approvedRoots: state.configuration.roots)
+            if !suggestions.isEmpty {
+                HStack(spacing: 8) {
+                    Text("Detected agent worktrees:").font(.caption).foregroundStyle(.secondary)
+                    ForEach(suggestions, id: \.path) { suggestion in
+                        Button("Add \(suggestion.label)", systemImage: "folder.badge.plus") {
+                            send(.addRoot(suggestion.path))
+                        }
+                        .font(.caption).disabled(model.isBusy)
+                    }
+                    Spacer()
+                }.padding(.horizontal, 16).padding(.bottom, 10)
+            }
             if let error = state.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled).padding(12) }
             if !state.warnings.isEmpty {
                 DisclosureGroup("Inspection warnings (\(state.warnings.count))") {
@@ -133,6 +146,24 @@ struct WorktreeReviewView: View {
         }.padding(.vertical, 4)
     }
     private func send(_ action: WorktreesFeature.Action) { model.store.send(.worktrees(action)) }
+
+    static func suggestedAgentRoots(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        approvedRoots: [String]
+    ) -> [(label: String, path: String)] {
+        let home = CleanupPath.fileURL(home)
+        return [
+            ("~/.t3/worktrees", home.appending(path: ".t3/worktrees", directoryHint: .isDirectory)),
+            ("~/.codex/worktrees", home.appending(path: ".codex/worktrees", directoryHint: .isDirectory)),
+        ].compactMap { label, url in
+            let canonical = CleanupPath.fileURL(url)
+            guard TemporaryBuildOutput.isRealDirectory(canonical),
+                  !approvedRoots.contains(where: { WorktreePathGuard.contains($0, canonical.path) }) else {
+                return nil
+            }
+            return (label, canonical.path)
+        }
+    }
     private func chooseFolder() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Allow Inspection"

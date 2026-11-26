@@ -101,7 +101,7 @@ enum PathDiagnostics {
         if TemporaryBuildOutput.kind(of: url, home: canonicalHome) != nil {
             let temp = explainTemporaryBuild(url, activity: activity, now: now, home: canonicalHome)
             if temp.verdict == .eligible { return temp }
-            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
+            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome, miseEnv: miseEnv) {
                 let generated = explainGenerated(url, rule: genRule, activity: activity, now: now,
                                                  home: canonicalHome, keep: keep)
                 if generated.verdict == .eligible { return generated }
@@ -114,7 +114,7 @@ enum PathDiagnostics {
                                              rules: activeRules, claudeDir: claudeProjectsDirectory,
                                              miseEnv: miseEnv, git: git, minimumBytes: minimumProjectBytes) {
             if project.verdict == .eligible { return project }
-            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
+            if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome, miseEnv: miseEnv) {
                 let generated = explainGenerated(url, rule: genRule, activity: activity, now: now,
                                                  home: canonicalHome, keep: keep)
                 if generated.verdict == .eligible { return generated }
@@ -123,7 +123,7 @@ enum PathDiagnostics {
             }
             return project
         }
-        if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome) {
+        if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome, miseEnv: miseEnv) {
             return explainGenerated(url, rule: genRule, activity: activity, now: now,
                                     home: canonicalHome, keep: keep)
         }
@@ -228,20 +228,35 @@ enum PathDiagnostics {
         if activity.contains(url) { reasons.append("A running process has open files in this folder.") }
         let running = activity.commands.intersection(rule.blockedCommands).sorted()
         if !running.isEmpty { reasons.append("Blocked while \(running.joined(separator: ", ")) is running.") }
+        let effectiveMinBytes = min(minimumBytes, rule.minimumBytes ?? minimumBytes)
         var bytes: Int64?
+        var resolvedRisk = rule.risk
         do {
-            let survey = try FolderSurvey.read(url, gitAllowedUnder: [])
+            let survey = try FolderSurvey.read(url, gitAllowedUnder: rule.allowSwiftPMMirrors ? nil : [])
             bytes = survey.bytes
-            if survey.idle(at: now) < EcosystemCacheInventory.minimumIdle { reasons.append("Cache was modified less than 1 hour ago.") }
-            if survey.bytes < minimumBytes { reasons.append("Size (\(survey.bytes.diskSize)) is below the \(minimumBytes.diskSize) threshold.") }
+            let idle = survey.idle(at: now)
+            resolvedRisk = rule.effectiveRisk(idle: idle)
+            if idle < rule.minimumIdle {
+                let hours = max(1, Int((rule.minimumIdle / 3_600).rounded()))
+                let unit = hours == 1 ? "hour" : "hours"
+                reasons.append("Cache was modified less than \(hours) \(unit) ago.")
+            }
+            if survey.bytes < effectiveMinBytes {
+                reasons.append("Size (\(survey.bytes.diskSize)) is below the \(effectiveMinBytes.diskSize) threshold.")
+            }
         } catch { reasons.append(error.localizedDescription) }
         do { try EcosystemCacheInventory.verifyNoRefusedNames(in: url, refused: rule.refuseNames) }
         catch { reasons.append(error.localizedDescription) }
-        do { try WorktreePathGuard.rejectSourceContainers(url) }
-        catch { reasons.append(error.localizedDescription) }
+        if rule.allowSwiftPMMirrors {
+            do { try SwiftPMCheckoutGuard.verifyMirrorsDirectory(url) }
+            catch { reasons.append(error.localizedDescription) }
+        } else {
+            do { try WorktreePathGuard.rejectSourceContainers(url) }
+            catch { reasons.append(error.localizedDescription) }
+        }
         guard reasons.isEmpty else { return skipped(url, matcher: matcher, sizeBytes: bytes, reasons: reasons) }
         return PathDiagnostic(path: url.path, verdict: .eligible, matcher: matcher,
-                              risk: riskKey(rule.risk), sizeBytes: bytes, summary: rule.reason, reasons: [])
+                              risk: riskKey(resolvedRisk), sizeBytes: bytes, summary: rule.reason, reasons: [])
     }
 
     private static func explainSimulator(
@@ -400,7 +415,7 @@ enum PathDiagnostics {
         let relFromRoot = String(url.path.dropFirst(matchingRoot.path.count + 1))
         if let skippedPart = relFromRoot.split(separator: "/").map(String.init).first(where: { rules.skip.contains($0) }) {
             // Built-in build folders (.build, DerivedData) are skipped here so GeneratedCleanupScope handles them.
-            if GeneratedCleanupScope.rule(for: url, home: home) != nil { return nil }
+            if GeneratedCleanupScope.rule(for: url, home: home, miseEnv: miseEnv) != nil { return nil }
             return skipped(url, matcher: "Project cache rules", reasons: ["'\(skippedPart)' is in the project-cache skip list."])
         }
         guard let hit = rules.matchDirectory(url, under: matchingRoot) else {

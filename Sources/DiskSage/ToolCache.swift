@@ -64,7 +64,8 @@ struct ToolCache: Sendable, Equatable {
                       reason: "Homebrew downloads and old versions of installed packages. `brew cleanup -s` removes them; Homebrew downloads them again when needed."),
             ToolCache(name: "uv package cache", folder: uv,
                       executables: ["/opt/homebrew/bin/uv", "/usr/local/bin/uv",
-                                    home.appending(path: ".local/bin/uv").path, home.appending(path: ".cargo/bin/uv").path],
+                                    home.appending(path: ".local/bin/uv").path, home.appending(path: ".cargo/bin/uv").path,
+                                    home.appending(path: ".local/share/mise/shims/uv").path],
                       arguments: ["cache", "clean", "--cache-dir", uv.path],
                       estimateArguments: nil,
                       environment: [:],
@@ -85,7 +86,8 @@ struct ToolCache: Sendable, Equatable {
                       executables: ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm",
                                     home.appending(path: "Library/pnpm/pnpm").path,
                                     home.appending(path: ".local/share/pnpm/pnpm").path,
-                                    home.appending(path: ".volta/bin/pnpm").path],
+                                    home.appending(path: ".volta/bin/pnpm").path,
+                                    home.appending(path: ".local/share/mise/shims/pnpm").path],
                       arguments: ["store", "prune"],
                       estimateArguments: nil,
                       environment: ["npm_config_store_dir": pnpm.path],
@@ -102,7 +104,8 @@ struct ToolCache: Sendable, Equatable {
                       reason: "Python wheels and source archives cached by pip. `pip3 cache purge` removes them; pip downloads packages again when needed."),
             ToolCache(name: "Bun package cache", folder: bun,
                       executables: [home.appending(path: ".bun/bin/bun").path,
-                                    "/opt/homebrew/bin/bun", "/usr/local/bin/bun"],
+                                    "/opt/homebrew/bin/bun", "/usr/local/bin/bun",
+                                    home.appending(path: ".local/share/mise/shims/bun").path],
                       arguments: ["pm", "cache", "prune"],
                       estimateArguments: nil,
                       environment: ["BUN_INSTALL_CACHE_DIR": bun.path],
@@ -116,7 +119,8 @@ struct ToolCache: Sendable, Equatable {
                       reason: "Older package folders cached by Bun. `bun pm cache prune` removes stale packages while keeping global store links."),
             ToolCache(name: "Yarn 1 package cache", folder: yarn,
                       executables: ["/opt/homebrew/bin/yarn", "/usr/local/bin/yarn",
-                                    home.appending(path: ".volta/bin/yarn").path],
+                                    home.appending(path: ".volta/bin/yarn").path,
+                                    home.appending(path: ".local/share/mise/shims/yarn").path],
                       arguments: ["cache", "clean", "--cache-folder", yarn.path],
                       estimateArguments: nil,
                       environment: [:],
@@ -141,8 +145,43 @@ struct ToolCache: Sendable, Equatable {
             free(resolved)
             dirs.insert(resolvedDir, at: 1)
         }
+        dirs.append(home.appending(path: ".local/share/mise/shims").path)
+        dirs.append(home.appending(path: ".local/share/mise/installs/node/latest/bin").path)
+        dirs.append(home.appending(path: ".local/share/mise/installs/node/lts/bin").path)
+        dirs += versionedNodeBinDirectories(under: home.appending(path: ".local/share/mise/installs/node"))
+        dirs += versionedNodeBinDirectories(under: home.appending(path: ".nvm/versions/node"))
+        dirs.append(home.appending(path: "Library/Application Support/fnm/aliases/default/bin").path)
+        dirs.append(home.appending(path: ".local/share/fnm/aliases/default/bin").path)
         var seen = Set<String>()
         return dirs.filter { seen.insert($0).inserted }.map { $0 + "/node" }
+    }
+
+    private static func versionedNodeBinDirectories(under root: URL) -> [String] {
+        guard TemporaryBuildOutput.isRealDirectory(root),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return [] }
+        let parsed: [(major: Int, minor: Int, patch: Int, name: String, binPath: String)] = names.compactMap { name in
+            let child = root.appending(path: name, directoryHint: .isDirectory)
+            guard TemporaryBuildOutput.isRealDirectory(child),
+                  let version = parseSemverTuple(name) else { return nil }
+            return (version.major, version.minor, version.patch, name, child.appending(path: "bin").path)
+        }
+        return parsed.sorted { lhs, rhs in
+            if lhs.major != rhs.major { return lhs.major > rhs.major }
+            if lhs.minor != rhs.minor { return lhs.minor > rhs.minor }
+            if lhs.patch != rhs.patch { return lhs.patch > rhs.patch }
+            return lhs.name > rhs.name
+        }.map(\.binPath)
+    }
+
+    private static func parseSemverTuple(_ name: String) -> (major: Int, minor: Int, patch: Int)? {
+        let stripped = (name.hasPrefix("v") || name.hasPrefix("V")) ? String(name.dropFirst()) : name
+        let parts = stripped.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count),
+              parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
+              let major = Int(parts[0]) else { return nil }
+        let minor = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        let patch = parts.count > 2 ? (Int(parts[2]) ?? 0) : 0
+        return (major, minor, patch)
     }
 
     /// Reads dry-run summaries from Homebrew ("would free approximately 1.2GB")

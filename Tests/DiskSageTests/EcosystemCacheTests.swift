@@ -133,4 +133,91 @@ struct EcosystemCacheTests {
             #expect(try FileManager.default.contentsOfDirectory(atPath: candidate.url.path).isEmpty)
         }
     }
+
+    @Test func offersSwiftPMManifestsMirrorsUpdaterCachesAndCodexPlusHuggingFace() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let git = WorktreeGitProcess()
+
+        // Valid SwiftPM manifest cache and verified bare mirror under repositories/.
+        try f.write("Library/Caches/org.swift.swiftpm/manifests/manifest.db", bytes: 4_096)
+        let upstream = f.base.appending(path: "upstream/Pkg")
+        try FileManager.default.createDirectory(at: upstream, withIntermediateDirectories: true)
+        _ = try git.run(upstream.path, ["init", "-b", "main"])
+        _ = try git.run(upstream.path, ["config", "user.name", "Test"])
+        _ = try git.run(upstream.path, ["config", "user.email", "test@example.com"])
+        try Data("// swift-tools-version: 6.0\n".utf8).write(to: upstream.appending(path: "Package.swift"))
+        _ = try git.run(upstream.path, ["add", "Package.swift"])
+        _ = try git.run(upstream.path, ["commit", "-m", "Initial"])
+        let mirrorsRoot = f.base.appending(path: "Library/Caches/org.swift.swiftpm/repositories")
+        try FileManager.default.createDirectory(at: mirrorsRoot, withIntermediateDirectories: true)
+        _ = try git.run(mirrorsRoot.path, ["clone", "--mirror", upstream.path, "Pkg-deadbeef"])
+
+        // Codex runtimes + HuggingFace caches (24h idle minimum, medium risk) and Squirrel updaters.
+        try f.write(".cache/codex-runtimes/codex-primary-runtime/runtime.json", bytes: 4_096)
+        try f.write(".cache/huggingface/token", bytes: 64)
+        try f.write(".cache/huggingface/stored_tokens", bytes: 64)
+        try f.write(".cache/huggingface/hub/model.safetensors", bytes: 4_096)
+        try f.write(".cache/huggingface/datasets/ds.arrow", bytes: 4_096)
+        try f.write(".cache/huggingface/assets/a.bin", bytes: 4_096)
+        try f.write(".cache/huggingface/xet/chunk.bin", bytes: 4_096)
+        try f.write("Library/Caches/com.microsoft.VSCode.ShipIt/update.zip", bytes: 4_096)
+        try f.write("Library/Caches/t3code-updater/update.zip", bytes: 11 * 1_048_576)
+
+        // At 2h: SwiftPM manifests + mirrors are offered (.low); 24h caches stay hidden.
+        let at2h = f.later(hours: 2)
+        let earlyNames = Set(EcosystemCacheInventory.candidates(activity: .idle, now: at2h, home: f.base, minimumBytes: 1).map(\.name))
+        #expect(earlyNames == Set(["SwiftPM manifest cache", "SwiftPM repository mirrors"]))
+
+        // At 30h: Codex, HuggingFace subdirectories, and both updaters appear at .medium risk.
+        let at30h = f.later(hours: 30)
+        let midCandidates = EcosystemCacheInventory.candidates(activity: .idle, now: at30h, home: f.base, minimumBytes: 1)
+        let mid = Dictionary(uniqueKeysWithValues: midCandidates.map { ($0.name, $0) })
+        #expect(mid["Codex runtimes cache"]?.risk == .medium)
+        #expect(mid["Hugging Face Hub cache"]?.risk == .medium)
+        #expect(mid["Hugging Face datasets cache"]?.risk == .medium)
+        #expect(mid["Hugging Face assets cache"]?.risk == .medium)
+        #expect(mid["Hugging Face Xet cache"]?.risk == .medium)
+        #expect(!midCandidates.contains { $0.url == CleanupPath.fileURL(f.base.appending(path: ".cache/huggingface")) })
+        #expect(mid["com.microsoft.VSCode.ShipIt updater cache"]?.risk == .medium)
+        #expect(mid["t3code-updater updater cache"]?.risk == .medium)
+        // Default minimumBytes (100 MiB) still admits updater caches above 10 MiB.
+        let defaultSized = EcosystemCacheInventory.candidates(activity: .idle, now: at30h, home: f.base)
+        #expect(defaultSized.map(\.name) == ["t3code-updater updater cache"])
+        // Running ShipIt blocks updater caches cleanly.
+        let shipItBusy = EcosystemCacheInventory.candidates(activity: CleanupActivity(paths: [], commands: ["ShipIt"]), now: at30h, home: f.base, minimumBytes: 1)
+        #expect(!shipItBusy.contains { $0.name.contains("updater cache") })
+
+        // At 80h (>= 72h): updater caches escalate to .low, while Codex & HuggingFace remain .medium.
+        let at80h = f.later(hours: 80)
+        let late = Dictionary(uniqueKeysWithValues: EcosystemCacheInventory.candidates(activity: .idle, now: at80h, home: f.base, minimumBytes: 1).map { ($0.name, $0) })
+        #expect(late["com.microsoft.VSCode.ShipIt updater cache"]?.risk == .low)
+        #expect(late["Codex runtimes cache"]?.risk == .medium)
+        #expect(late["Hugging Face Hub cache"]?.risk == .medium)
+        #expect(late["Hugging Face datasets cache"]?.risk == .medium)
+        #expect(late["Hugging Face assets cache"]?.risk == .medium)
+        #expect(late["Hugging Face Xet cache"]?.risk == .medium)
+
+        // Verify diagnostics & cleanups for mirrors, manifests, updaters, and HuggingFace subdirectories.
+        let mirrorsURL = CleanupPath.fileURL(mirrorsRoot)
+        let mirrorDiag = PathDiagnostics.explain(mirrorsURL.path, activity: .idle, now: at2h, home: f.base, git: git, minimumGlobalBytes: 1)
+        #expect(mirrorDiag.verdict == .eligible && mirrorDiag.risk == "low")
+        for key in ["SwiftPM manifest cache", "SwiftPM repository mirrors", "com.microsoft.VSCode.ShipIt updater cache",
+                    "Hugging Face Hub cache", "Hugging Face datasets cache", "Hugging Face assets cache", "Hugging Face Xet cache"] {
+            let candidate = try #require(late[key])
+            try SafetyPolicy(home: f.base, now: at80h).validate(candidate)
+            try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: .idle, now: at80h, home: f.base)
+            try SecureFileDeleter.delete(candidate, entryRemoved: {})
+            #expect(f.exists(candidate.url))
+            #expect(try FileManager.default.contentsOfDirectory(atPath: candidate.url.path).isEmpty)
+        }
+        // Persistent HF login credentials at ~/.cache/huggingface stay untouched.
+        #expect(f.exists(f.base.appending(path: ".cache/huggingface/token")))
+        #expect(f.exists(f.base.appending(path: ".cache/huggingface/stored_tokens")))
+
+        // Tamper with SwiftPM repositories by adding an unexpected file / non-mirror repo -> refused everywhere.
+        try f.write("Library/Caches/org.swift.swiftpm/repositories/rogue.txt", bytes: 64)
+        #expect(!EcosystemCacheInventory.candidates(activity: .idle, now: f.later(hours: 100), home: f.base, minimumBytes: 1).contains { $0.name == "SwiftPM repository mirrors" })
+        let tamperedDiag = PathDiagnostics.explain(mirrorsURL.path, activity: .idle, now: f.later(hours: 100), home: f.base, git: git, minimumGlobalBytes: 1)
+        #expect(tamperedDiag.verdict == .skipped)
+    }
 }

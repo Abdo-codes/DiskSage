@@ -34,6 +34,77 @@ enum SwiftPMCheckoutGuard {
         }
     }
 
+    /// Verifies that every entry under a global SwiftPM `repositories/` cache directory
+    /// is an unmodified bare mirror with no symlinks, lock files, extra Git checkouts, or reflog-only commits.
+    static func verifyMirrorsDirectory(_ repositoriesDir: URL, git: WorktreeGitProcess = WorktreeGitProcess(),
+                                       maximumEntries: Int = 200_000) throws {
+        let root = CleanupPath.fileURL(repositoriesDir)
+        guard TemporaryBuildOutput.isRealDirectory(root) else {
+            throw FeatureFailure(message: "Could not inspect SwiftPM mirrors directory.")
+        }
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        } catch {
+            throw FeatureFailure(message: "Could not list SwiftPM mirrors directory: \(error.localizedDescription)")
+        }
+        var visited = 0
+        for name in entries {
+            try Task.checkCancellation()
+            if name == ".DS_Store" { continue }
+            let child = root.appending(path: name, directoryHint: .isDirectory)
+            var childInfo = stat()
+            guard lstat(child.path, &childInfo) == 0,
+                  (childInfo.st_mode & S_IFMT) == S_IFDIR,
+                  childInfo.st_uid == getuid() else {
+                throw FeatureFailure(message: "Unexpected or symlinked entry inside SwiftPM mirrors: \(name).")
+            }
+            try git.rejectHelpers(child.path)
+            _ = try verifyMirror(child, git: git)
+            try verifyCleanMirrorTree(child, visited: &visited, maximumEntries: maximumEntries)
+        }
+    }
+
+    private static func verifyCleanMirrorTree(_ mirror: URL, visited: inout Int, maximumEntries: Int) throws {
+        var failed = false
+        guard let walker = FileManager.default.enumerator(
+            at: mirror,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: [],
+            errorHandler: { _, _ in failed = true; return false }
+        ) else {
+            throw FeatureFailure(message: "Could not inspect SwiftPM mirror \(mirror.lastPathComponent).")
+        }
+        for case let rawURL as URL in walker {
+            try Task.checkCancellation()
+            visited += 1
+            guard visited <= maximumEntries else {
+                throw FeatureFailure(message: "SwiftPM mirror inspection exceeded its safety limit.")
+            }
+            let url = CleanupPath.fileURL(rawURL)
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else {
+                throw FeatureFailure(message: "Could not inspect \(url.path) inside SwiftPM mirror.")
+            }
+            guard (info.st_mode & S_IFMT) != S_IFLNK else {
+                throw FeatureFailure(message: "Symlink found inside SwiftPM mirror \(mirror.lastPathComponent).")
+            }
+            let name = url.lastPathComponent
+            if name.lowercased() == ".git" || name == "commondir" || name == "gitdir" {
+                throw FeatureFailure(message: "Nested Git state found inside SwiftPM mirror \(mirror.lastPathComponent).")
+            }
+            if name == "HEAD", (info.st_mode & S_IFMT) == S_IFREG {
+                let parent = url.deletingLastPathComponent()
+                if parent != mirror && (isRealDir(parent.appending(path: "objects")) || isRealDir(parent.appending(path: "refs"))) {
+                    throw FeatureFailure(message: "Nested Git repository found inside SwiftPM mirror \(mirror.lastPathComponent).")
+                }
+            }
+        }
+        guard !failed else {
+            throw FeatureFailure(message: "Some folders inside SwiftPM mirror \(mirror.lastPathComponent) could not be read.")
+        }
+    }
+
     private static func discoverManagedRepos(in container: URL, maximumEntries: Int) throws -> (mirrors: [URL], checkouts: [URL]) {
         let checkoutsDir = container.appending(path: "checkouts", directoryHint: .isDirectory).path
         let repositoriesDir = container.appending(path: "repositories", directoryHint: .isDirectory).path
