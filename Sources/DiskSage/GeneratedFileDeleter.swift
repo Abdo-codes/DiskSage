@@ -53,30 +53,124 @@ enum GeneratedFileDeleter {
             handsOff: snapshot.handsOffWholeFolders == true
                 ? wholeFolderRule(activity: current, cutoff: snapshot.cutoff, home: policy.home) : { _ in false })
         guard inventory.rootIdentity == candidate.identity else { throw SecureDeletionError.identityChanged }
-        let entries = try unchangedEntries(inventory, snapshot: snapshot, size: candidate.size)
+        let entries = try unchangedEntries(inventory, snapshot: snapshot, size: candidate.size).sorted { lhs, rhs in
+            let lhsParent = lhs.parts.dropLast()
+            let rhsParent = rhs.parts.dropLast()
+            if !lhsParent.elementsEqual(rhsParent) {
+                return lhsParent.lexicographicallyPrecedes(rhsParent)
+            }
+            return (lhs.parts.last ?? "") < (rhs.parts.last ?? "")
+        }
         try activity().requireIdle(candidate.url, rule: snapshot.rule)
         var removedBytes: Int64 = 0, removedFiles = 0
         var lastActivityCheck = Date()
+        let uid = getuid()
+        var rootFD: Int32 = -1
+        var verifiedRootPath: String?
+        var currentParentParts: [String]?
+        var currentParentFD: Int32 = -1
+        var verifiedParentPath: String?
+        var currentParentOriginalMode: mode_t?
+
+        func closeCurrentParent() throws {
+            let fd = currentParentFD
+            let originalMode = currentParentOriginalMode
+            currentParentFD = -1
+            currentParentParts = nil
+            verifiedParentPath = nil
+            currentParentOriginalMode = nil
+            guard fd >= 0 else { return }
+            defer { close(fd) }
+            if let originalMode, fchmod(fd, originalMode) != 0 {
+                throw SecureDeletionError.systemCall("Restoring compiler-cache permissions", errno)
+            }
+        }
+
+        func closeRoot() {
+            if rootFD >= 0 {
+                close(rootFD)
+                rootFD = -1
+            }
+            verifiedRootPath = nil
+        }
+
+        defer {
+            _ = try? closeCurrentParent()
+            closeRoot()
+        }
+
         do {
             for (index, entry) in entries.enumerated() {
                 try Task.checkCancellation()
                 try beforeEntry(index)
                 if index > 0 && Date().timeIntervalSince(lastActivityCheck) >= 2 {
+                    try closeCurrentParent()
+                    closeRoot()
                     try activity().requireIdle(candidate.url, rule: snapshot.rule)
                     lastActivityCheck = Date()
                 }
-                let parent = try verifiedParent(candidate, parts: entry.parts)
-                defer { close(parent) }
+                guard let name = entry.parts.last, !name.isEmpty else {
+                    throw SecureDeletionError.identityChanged
+                }
+                let parentParts = Array(entry.parts.dropLast())
+                let reuseCachedParent = currentParentParts == parentParts && currentParentFD >= 0 && verifiedParentPath != nil
+                if reuseCachedParent {
+                    if let expectedRoot = verifiedRootPath, directoryPath(of: rootFD) != expectedRoot {
+                        throw SecureDeletionError.identityChanged
+                    }
+                    guard directoryPath(of: currentParentFD) == verifiedParentPath else {
+                        throw SecureDeletionError.identityChanged
+                    }
+                } else {
+                    try closeCurrentParent()
+                    if rootFD >= 0 {
+                        if let expectedRoot = verifiedRootPath {
+                            guard directoryPath(of: rootFD) == expectedRoot else {
+                                throw SecureDeletionError.identityChanged
+                            }
+                        } else {
+                            closeRoot()
+                        }
+                    }
+                    if rootFD < 0 {
+                        rootFD = try openVerifiedRoot(for: candidate)
+                        verifiedRootPath = directoryPath(of: rootFD)
+                    }
+                    currentParentFD = try openVerifiedParent(
+                        from: rootFD, parentParts: parentParts[...],
+                        device: candidate.identity.device, uid: uid
+                    )
+                    currentParentParts = parentParts
+                    verifiedParentPath = directoryPath(of: currentParentFD)
+                }
                 var actual = stat()
-                guard let name = entry.parts.last,
-                      fstatat(parent, name, &actual, AT_SYMLINK_NOFOLLOW) == 0,
+                guard fstatat(currentParentFD, name, &actual, AT_SYMLINK_NOFOLLOW) == 0,
                       actual.st_mode & S_IFMT == S_IFREG, GeneratedFileStamp(actual) == entry.stamp else {
                     throw SecureDeletionError.identityChanged
                 }
-                try unlinkGenerated(parent: parent, name: name, removed: {
-                    removedBytes += entry.stamp.allocated; removedFiles += 1; entryRemoved()
-                })
+                if unlinkat(currentParentFD, name, 0) != 0 {
+                    let code = errno
+                    var parentInfo = stat()
+                    guard code == EACCES, currentParentOriginalMode == nil,
+                          fstat(currentParentFD, &parentInfo) == 0, parentInfo.st_uid == uid,
+                          parentInfo.st_mode & S_IWUSR == 0, parentInfo.st_flags == 0 else {
+                        throw SecureDeletionError.systemCall("Removing generated file", code)
+                    }
+                    let original = parentInfo.st_mode & 0o7777
+                    guard fchmod(currentParentFD, original | S_IWUSR) == 0 else {
+                        throw SecureDeletionError.systemCall("Preparing owned compiler cache", errno)
+                    }
+                    currentParentOriginalMode = original
+                    guard unlinkat(currentParentFD, name, 0) == 0 else {
+                        throw SecureDeletionError.systemCall("Removing generated file", errno)
+                    }
+                }
+                removedBytes += entry.stamp.allocated
+                removedFiles += 1
+                entryRemoved()
             }
+            try closeCurrentParent()
+            closeRoot()
         } catch {
             guard removedFiles > 0 else { throw error }
             throw PartialCleanupFailure(removedBytes: removedBytes, removedFiles: removedFiles, reason: error.localizedDescription)
@@ -97,42 +191,37 @@ enum GeneratedFileDeleter {
         return entries
     }
 
-    private static func verifiedParent(_ candidate: CleanupCandidate, parts: [String]) throws -> Int32 {
-        var fd = try SecureFileDeleter.openDirectoryChain(Array(CleanupPath.fileURL(candidate.url).pathComponents.dropFirst()))
+    private static func directoryPath(of fd: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    private static func openVerifiedRoot(for candidate: CleanupCandidate) throws -> Int32 {
+        let fd = try SecureFileDeleter.openDirectoryChain(Array(CleanupPath.fileURL(candidate.url).pathComponents.dropFirst()))
+        var info = stat()
+        guard fstat(fd, &info) == 0,
+              FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)) == candidate.identity else {
+            close(fd)
+            throw SecureDeletionError.identityChanged
+        }
+        return fd
+    }
+
+    private static func openVerifiedParent(from rootFD: Int32, parentParts: ArraySlice<String>,
+                                           device: UInt64, uid: uid_t) throws -> Int32 {
+        var fd = fcntl(rootFD, F_DUPFD_CLOEXEC, 0)
+        guard fd >= 0 else { throw SecureDeletionError.systemCall("Duplicating generated root", errno) }
         do {
             var info = stat()
-            guard fstat(fd, &info) == 0,
-                  FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)) == candidate.identity else {
-                throw SecureDeletionError.identityChanged
-            }
-            for component in parts.dropLast() {
+            for component in parentParts {
                 let child = openat(fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                 guard child >= 0 else { throw SecureDeletionError.systemCall("Opening generated parent", errno) }
                 close(fd); fd = child
-                guard fstat(fd, &info) == 0, UInt64(info.st_dev) == candidate.identity.device,
-                      info.st_uid == getuid() else { throw SecureDeletionError.identityChanged }
+                guard fstat(fd, &info) == 0, UInt64(info.st_dev) == device,
+                      info.st_uid == uid else { throw SecureDeletionError.identityChanged }
             }
             return fd
         } catch { close(fd); throw error }
-    }
-
-    /// Read-only compiler output directories are common. Never change ACLs, flags or another user's permissions.
-    private static func unlinkGenerated(parent: Int32, name: String, removed: () -> Void) throws {
-        if unlinkat(parent, name, 0) == 0 { removed(); return }
-        let code = errno
-        var info = stat()
-        guard code == EACCES, fstat(parent, &info) == 0, info.st_uid == getuid(),
-              info.st_mode & S_IWUSR == 0, info.st_flags == 0 else {
-            throw SecureDeletionError.systemCall("Removing generated file", code)
-        }
-        let original = info.st_mode & 0o7777
-        guard fchmod(parent, original | S_IWUSR) == 0 else {
-            throw SecureDeletionError.systemCall("Preparing owned compiler cache", errno)
-        }
-        let status = unlinkat(parent, name, 0), removalCode = errno
-        if status == 0 { removed() }
-        let restored = fchmod(parent, original), restoreCode = errno
-        guard restored == 0 else { throw SecureDeletionError.systemCall("Restoring compiler-cache permissions", restoreCode) }
-        guard status == 0 else { throw SecureDeletionError.systemCall("Removing generated file", removalCode) }
     }
 }

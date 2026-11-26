@@ -68,6 +68,102 @@ struct CleanupServiceTests {
         #expect(events.last?.removedEntryCount == 2)
     }
 
+    @Test
+    func deletesContentsOfOwnedReadOnlyDirectoriesAndRestoresRootMode() throws {
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let cache = fakeHome.appending(path: "Library/Caches/ro-eco-cache", directoryHint: .isDirectory)
+        let nested = cache.appending(path: "nested/sub", directoryHint: .isDirectory)
+        let emptySub = cache.appending(path: "empty-ro", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: emptySub, withIntermediateDirectories: true)
+        try Data(repeating: 0x33, count: 1024).write(to: nested.appending(path: "file.bin"))
+        try FileManager.default.createSymbolicLink(at: nested.appending(path: "alias"), withDestinationURL: fakeHome)
+        let lockedDirs = [nested, cache.appending(path: "nested", directoryHint: .isDirectory), emptySub, cache]
+        for dir in lockedDirs { #expect(chmod(dir.path, 0o555) == 0) }
+        defer { for dir in lockedDirs.reversed() { chmod(dir.path, 0o755) } }
+
+        let candidate = CleanupCandidate(
+            url: cache,
+            name: "Read-only cache",
+            category: .cache,
+            size: 1024,
+            risk: .low,
+            reason: "Fixture",
+            identity: try identity(of: cache),
+            deletionMode: .contents
+        )
+        var removedCount = 0
+        try SecureFileDeleter.delete(candidate, entryRemoved: { removedCount += 1 })
+        #expect(removedCount == 5)
+        #expect(FileManager.default.fileExists(atPath: cache.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cache.path).isEmpty)
+        var rootInfo = stat()
+        #expect(lstat(cache.path, &rootInfo) == 0)
+        #expect(rootInfo.st_mode & 0o777 == 0o555)
+    }
+
+    @Test(arguments: [DeletionMode.item, DeletionMode.projectCache])
+    func deletesReadOnlyTargetInsideReadOnlyParentAndRestoresParentMode(mode: DeletionMode) throws {
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let parent = fakeHome.appending(path: "Developer/locked-parent", directoryHint: .isDirectory)
+        let target = parent.appending(path: "node_modules", directoryHint: .isDirectory)
+        let nested = target.appending(path: "pkg", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data(repeating: 0x44, count: 512).write(to: nested.appending(path: "artifact.bin"))
+        for dir in [nested, target, parent] { #expect(chmod(dir.path, 0o555) == 0) }
+        defer { for dir in [parent, target, nested] { chmod(dir.path, 0o755) } }
+
+        let candidate = CleanupCandidate(
+            url: target,
+            name: "node_modules",
+            category: .cache,
+            size: 512,
+            risk: .low,
+            reason: "Fixture",
+            identity: try identity(of: target),
+            deletionMode: mode
+        )
+        var removedCount = 0
+        try SecureFileDeleter.delete(candidate, entryRemoved: { removedCount += 1 })
+        #expect(removedCount == 3)
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+        var parentInfo = stat()
+        #expect(lstat(parent.path, &parentInfo) == 0)
+        #expect(parentInfo.st_mode & 0o777 == 0o555)
+    }
+
+    @Test
+    func refusesImmutableDirectoryWithoutClearingFlags() throws {
+        let fakeHome = URL(fileURLWithPath: "/private/tmp/DS-test-home-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let cache = fakeHome.appending(path: "Library/Caches/immutable-cache", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let file = cache.appending(path: "keep.bin")
+        try Data(repeating: 0x11, count: 256).write(to: file)
+        #expect(chflags(cache.path, UInt32(UF_IMMUTABLE)) == 0)
+        defer { _ = chflags(cache.path, 0) }
+
+        let candidate = CleanupCandidate(
+            url: cache,
+            name: "Immutable cache",
+            category: .cache,
+            size: 256,
+            risk: .low,
+            reason: "Fixture",
+            identity: try identity(of: cache),
+            deletionMode: .contents
+        )
+        #expect(throws: SecureDeletionError.self) {
+            try SecureFileDeleter.delete(candidate, entryRemoved: {})
+        }
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        var info = stat()
+        #expect(lstat(cache.path, &info) == 0)
+        #expect(info.st_flags & UInt32(UF_IMMUTABLE) != 0)
+    }
+
     private func identity(of url: URL) throws -> FileIdentity {
         var info = stat()
         try #require(lstat(url.path, &info) == 0)
