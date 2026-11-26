@@ -1,8 +1,9 @@
 import Foundation
 
 enum GeneratedCleanupScope {
-    static let apps = ["Claude", "Claude-Work", "Code", "Slack", "Paper", "Spark Desktop", "Discord", "Postman"]
+    static let apps = ["Claude", "Code", "Cursor", "Windsurf", "Antigravity", "Slack", "Paper", "Spark Desktop", "Discord", "Postman", "Granola"]
     static let cacheNames = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache"]
+    private static let vsCodeApps: Set<String> = ["Code", "Cursor", "Windsurf", "Antigravity"]
 
     static func fixedLocations(home: URL) -> [(URL, String, GeneratedCleanupRule)] {
         var values: [(URL, String, GeneratedCleanupRule)] = [
@@ -18,7 +19,7 @@ enum GeneratedCleanupScope {
         ]
         for app in apps {
             var names = cacheNames
-            if app == "Code" { names += ["CachedData", "CachedExtensionVSIXs"] }
+            if vsCodeApps.contains(app) { names += ["CachedData", "CachedExtensionVSIXs"] }
             for name in names {
                 values.append((home.appending(path: "Library/Application Support/\(app)/\(name)"), "\(app) · \(name)", .browserCache))
             }
@@ -26,18 +27,25 @@ enum GeneratedCleanupScope {
         return values.map { (CleanupPath.fileURL($0.0), $0.1, $0.2) }
     }
 
-    static func discoveryRoots(home: URL) -> [URL] {
-        [home.appending(path: "Developer"), home.appending(path: "Documents/Codex"),
-         home.appending(path: ".codex/visualizations"), URL(fileURLWithPath: "/private/tmp"),
-         URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/agent-device/apple/macos-helper")]
-            .map(CleanupPath.fileURL)
+    static func discoveryRoots(home: URL, miseEnv: MiseProjectDiscovery.Environment? = nil) -> [URL] {
+        let home = CleanupPath.fileURL(home)
+        let builtIn = [
+            home.appending(path: "Developer"),
+            home.appending(path: "Documents/Codex"),
+            home.appending(path: ".codex/visualizations"),
+            URL(fileURLWithPath: "/private/tmp"),
+        ]
+        let extra = ProjectCacheRulesLoader.extraRoots(home: home)
+        let miseRoots = MiseProjectDiscovery.projectRoots(home: home, env: miseEnv)
+        return MiseProjectDiscovery.uniqueSorted(builtIn + extra + miseRoots)
     }
 
-    static func rule(for url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> GeneratedCleanupRule? {
+    static func rule(for url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                     miseEnv: MiseProjectDiscovery.Environment? = nil) -> GeneratedCleanupRule? {
         let root = CleanupPath.fileURL(url), home = CleanupPath.fileURL(home)
         if let fixed = fixedLocations(home: home).first(where: { $0.0 == root }) { return fixed.2 }
         guard !root.pathComponents.contains(where: GeneratedCleanupPolicy.protected),
-              discoveryRoots(home: home).contains(where: { root.path.hasPrefix($0.path + "/") }),
+              discoveryRoots(home: home, miseEnv: miseEnv).contains(where: { root.path.hasPrefix($0.path + "/") }),
               isBuildDirectory(root) else { return nil }
         return .buildArtifacts
     }

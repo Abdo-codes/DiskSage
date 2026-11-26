@@ -93,4 +93,49 @@ struct GeneratedDiscoveryTests {
         #expect(report.estimatedRemovedBytes == 4_096 && report.items.first?.removedBytes == 4_096)
         #expect(!f.exists("debug/a.o") && f.exists("debug/b.o"))
     }
+
+    @Test func recognizesBroadIDECachesAndExtraPlusMiseBuildRoots() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        for rel in [
+            "Library/Application Support/Cursor/Cache",
+            "Library/Application Support/Cursor/CachedData",
+            "Library/Application Support/Windsurf/CachedExtensionVSIXs",
+            "Library/Application Support/Antigravity/Cache",
+            "Library/Application Support/Granola/GPUCache",
+        ] {
+            #expect(GeneratedCleanupScope.rule(for: f.home.appending(path: rel), home: f.home) == .browserCache)
+        }
+        #expect(GeneratedCleanupScope.rule(
+            for: f.home.appending(path: "Library/Application Support/Claude-Work/Cache"),
+            home: f.home
+        ) == nil)
+        #expect(GeneratedCleanupScope.rule(
+            for: URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/agent-device/apple/macos-helper/DerivedData"),
+            home: f.home
+        ) == nil)
+
+        // Configure extra_roots and a mise tracked project outside ~/Developer.
+        let extraRoot = f.home.appending(path: "Work/custom-workspace", directoryHint: .isDirectory)
+        let extraBuild = extraRoot.appending(path: "App/.build", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: extraBuild, withIntermediateDirectories: true)
+        let configURL = ProjectCacheRulesLoader.configURL(home: f.home, env: [:])
+        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(ProjectCacheRulesLoader.UserConfig(extraRoots: ["~/Work/custom-workspace"])).write(to: configURL)
+
+        let miseProject = f.home.appending(path: "Tools/mise-app", directoryHint: .isDirectory)
+        let miseBuild = miseProject.appending(path: ".build", directoryHint: .isDirectory)
+        let miseConfig = miseProject.appending(path: "mise.toml")
+        try FileManager.default.createDirectory(at: miseBuild, withIntermediateDirectories: true)
+        try Data("[tools]\n".utf8).write(to: miseConfig)
+        let miseEnv = MiseProjectDiscovery.Environment(home: f.home)
+        try FileManager.default.createDirectory(at: miseEnv.trackedConfigsDir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: miseEnv.trackedConfigsDir.appending(path: "mise-app"), withDestinationURL: miseConfig)
+
+        let roots = Set(GeneratedCleanupScope.discoveryRoots(home: f.home, miseEnv: miseEnv))
+        #expect(roots.contains(CleanupPath.fileURL(extraRoot)))
+        #expect(roots.contains(CleanupPath.fileURL(miseProject)))
+        #expect(GeneratedCleanupScope.rule(for: extraBuild, home: f.home, miseEnv: miseEnv) == .buildArtifacts)
+        #expect(GeneratedCleanupScope.rule(for: miseBuild, home: f.home, miseEnv: miseEnv) == .buildArtifacts)
+        #expect(Set(GeneratedBuildDiscovery().directories(under: extraRoot)) == [CleanupPath.fileURL(extraBuild)])
+    }
 }

@@ -229,4 +229,32 @@ struct ToolCacheTests {
             try ToolCacheInventory.clean(offered, activity: .idle, home: f.base, trusted: trusted, run: runner(version: "4.5.0"))
         }
     }
+
+    @Test func trustedNodeCandidatesFindsMiseNvmDescendingAndFnmAndMiseShims() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        try f.write(".nvm/versions/node/v9.0.0/bin/node")
+        try f.write(".nvm/versions/node/v24.2.0/bin/node")
+        try f.write(".local/share/mise/installs/node/22.22.0/bin/node")
+        let nvm24 = CleanupPath.fileURL(f.base.appending(path: ".nvm/versions/node/v24.2.0/bin/node")).path
+        let nvm9 = CleanupPath.fileURL(f.base.appending(path: ".nvm/versions/node/v9.0.0/bin/node")).path
+        let miseShimNode = CleanupPath.fileURL(f.base.appending(path: ".local/share/mise/shims/node")).path
+        let fnmDefaultNode = CleanupPath.fileURL(f.base.appending(path: ".local/share/fnm/aliases/default/bin/node")).path
+
+        let pnpm = try #require(ToolCache.all(home: f.base).first { $0.name == "pnpm package store" })
+        #expect(pnpm.executables.contains(CleanupPath.fileURL(f.base.appending(path: ".local/share/mise/shims/pnpm")).path))
+
+        let candidates = ToolCache.trustedNodeCandidates(home: f.base, executable: "/custom/bin/pnpm")
+        let index24 = try #require(candidates.firstIndex(of: nvm24))
+        let index9 = try #require(candidates.firstIndex(of: nvm9))
+        #expect(index24 < index9)
+        #expect(candidates.contains(miseShimNode))
+        #expect(candidates.contains(fnmDefaultNode))
+
+        // Only a trusted fnm Node binary gets added to PATH.
+        let trustedFnm: ToolCacheInventory.Trusted = { $0 == fnmDefaultNode }
+        let env = ToolCacheInventory.executionEnvironment(for: pnpm, executable: "/custom/bin/pnpm",
+                                                          home: f.base, trusted: trustedFnm)
+        let fnmBinDir = URL(fileURLWithPath: fnmDefaultNode).deletingLastPathComponent().path
+        #expect(env["PATH"] == "\(fnmBinDir):/usr/bin:/bin:/usr/sbin:/sbin")
+    }
 }

@@ -15,12 +15,21 @@ enum EcosystemCacheInventory {
         /// Running process names that make cleanup unsafe even without an open file in `folder`.
         let blockedCommands: Set<String>
         let reason: String
+        var minimumIdle: TimeInterval = EcosystemCacheInventory.minimumIdle
+        var minimumBytes: Int64? = nil
+        var lowRiskAfterIdle: TimeInterval? = nil
+        var allowSwiftPMMirrors: Bool = false
+
+        func effectiveRisk(idle: TimeInterval) -> RiskLevel {
+            if let lowRiskAfterIdle, idle >= lowRiskAfterIdle { return .low }
+            return risk
+        }
     }
 
     static let minimumBytes: Int64 = ToolCacheInventory.minimumBytes
     static let minimumIdle: TimeInterval = GeneratedCleanupPolicy.minimumAge
 
-    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [Rule] {
+    private static func staticRules(home: URL) -> [Rule] {
         let home = CleanupPath.fileURL(home)
         return [
             Rule(name: "Cargo registry cache",
@@ -48,6 +57,33 @@ enum EcosystemCacheInventory {
                  refuseNames: [],
                  blockedCommands: ["pod"],
                  reason: "Downloaded pod archives and specs in `~/Library/Caches/CocoaPods`. CocoaPods downloads them again on `pod install`."),
+            Rule(name: "SwiftPM manifest cache",
+                 folder: home.appending(path: "Library/Caches/org.swift.swiftpm/manifests", directoryHint: .isDirectory),
+                 risk: .low,
+                 refuseNames: [],
+                 blockedCommands: ["swift", "swift-build", "swift-package", "xcodebuild", "sourcekit-lsp", "Xcode"],
+                 reason: "Cached Swift Package Manager manifest metadata in `~/Library/Caches/org.swift.swiftpm/manifests`. SwiftPM regenerates them cleanly."),
+            Rule(name: "SwiftPM repository mirrors",
+                 folder: home.appending(path: "Library/Caches/org.swift.swiftpm/repositories", directoryHint: .isDirectory),
+                 risk: .low,
+                 refuseNames: [],
+                 blockedCommands: ["swift", "swift-build", "swift-package", "xcodebuild", "sourcekit-lsp", "Xcode"],
+                 reason: "Unmodified bare Git mirrors cloned by SwiftPM in `~/Library/Caches/org.swift.swiftpm/repositories`. SwiftPM clones them again during package resolution.",
+                 allowSwiftPMMirrors: true),
+            Rule(name: "Codex runtimes cache",
+                 folder: home.appending(path: ".cache/codex-runtimes", directoryHint: .isDirectory),
+                 risk: .medium,
+                 refuseNames: [],
+                 blockedCommands: ["codex"],
+                 reason: "Cached Codex CLI runtime bundles in `~/.cache/codex-runtimes`. Codex downloads them again when needed.",
+                 minimumIdle: 24 * 3_600),
+            Rule(name: "Hugging Face cache",
+                 folder: home.appending(path: ".cache/huggingface", directoryHint: .isDirectory),
+                 risk: .medium,
+                 refuseNames: [],
+                 blockedCommands: ["hf", "huggingface-cli"],
+                 reason: "Downloaded models and datasets in `~/.cache/huggingface`. Re-downloading large weights takes bandwidth and time.",
+                 minimumIdle: 24 * 3_600),
             Rule(name: "Playwright browsers",
                  folder: home.appending(path: "Library/Caches/ms-playwright", directoryHint: .isDirectory),
                  risk: .medium,
@@ -63,9 +99,46 @@ enum EcosystemCacheInventory {
         ]
     }
 
+    static func updaterRule(for url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Rule? {
+        let canonical = CleanupPath.fileURL(url)
+        let caches = CleanupPath.fileURL(home).appending(path: "Library/Caches", directoryHint: .isDirectory)
+        guard canonical.deletingLastPathComponent() == caches else { return nil }
+        let name = canonical.lastPathComponent
+        let isUpdater = (name.hasSuffix(".ShipIt") && name.count > 7) || (name.hasSuffix("-updater") && name.count > 8)
+        guard isUpdater else { return nil }
+        return Rule(
+            name: "\(name) updater cache",
+            folder: canonical,
+            risk: .medium,
+            refuseNames: [],
+            blockedCommands: ["ShipIt"],
+            reason: "Downloaded app update installers in `~/Library/Caches/\(name)`. The app downloads updates again when needed.",
+            minimumIdle: 24 * 3_600,
+            minimumBytes: 10 * 1_048_576,
+            lowRiskAfterIdle: 72 * 3_600
+        )
+    }
+
+    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [Rule] {
+        let home = CleanupPath.fileURL(home)
+        var rules = staticRules(home: home)
+        let caches = home.appending(path: "Library/Caches", directoryHint: .isDirectory)
+        if TemporaryBuildOutput.isRealDirectory(caches),
+           let names = try? FileManager.default.contentsOfDirectory(atPath: caches.path) {
+            for name in names.sorted() {
+                let child = caches.appending(path: name, directoryHint: .isDirectory)
+                if TemporaryBuildOutput.isRealDirectory(child), let rule = updaterRule(for: child, home: home) {
+                    rules.append(rule)
+                }
+            }
+        }
+        return rules
+    }
+
     static func matching(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Rule? {
-        let path = CleanupPath.fileURL(url).path
-        return all(home: home).first { $0.folder.path == path }
+        let canonical = CleanupPath.fileURL(url)
+        let path = canonical.path
+        return staticRules(home: home).first { $0.folder.path == path } ?? updaterRule(for: canonical, home: home)
     }
 
     static func candidates(activity: CleanupActivity, now: Date = Date(),
@@ -81,20 +154,26 @@ enum EcosystemCacheInventory {
                         home: URL = FileManager.default.homeDirectoryForCurrentUser,
                         minimumBytes: Int64 = minimumBytes) -> CleanupCandidate? {
         let url = CleanupPath.fileURL(rule.folder)
+        let threshold = min(minimumBytes, rule.minimumBytes ?? minimumBytes)
         guard TemporaryBuildOutput.isRealDirectory(url),
               !isBusy(rule, activity: activity),
-              let survey = try? FolderSurvey.read(url, gitAllowedUnder: []),
-              survey.bytes >= minimumBytes, survey.idle(at: now) >= minimumIdle,
-              (try? verifyNoRefusedNames(in: url, refused: rule.refuseNames)) != nil,
-              let identity = identity(of: url) else { return nil }
+              let survey = try? FolderSurvey.read(url, gitAllowedUnder: rule.allowSwiftPMMirrors ? nil : []) else { return nil }
+        let idle = survey.idle(at: now)
+        guard survey.bytes >= threshold, idle >= rule.minimumIdle,
+              (try? verifyNoRefusedNames(in: url, refused: rule.refuseNames)) != nil else { return nil }
+        if rule.allowSwiftPMMirrors {
+            guard (try? SwiftPMCheckoutGuard.verifyMirrorsDirectory(url)) != nil else { return nil }
+        }
+        guard let identity = identity(of: url) else { return nil }
         let candidate = CleanupCandidate(url: url, name: rule.name, category: .cache, size: survey.bytes,
-                                         risk: rule.risk, reason: rule.reason, identity: identity, deletionMode: .contents)
+                                         risk: rule.effectiveRisk(idle: idle), reason: rule.reason,
+                                         identity: identity, deletionMode: .contents)
         guard (try? SafetyPolicy(home: home, now: now).validate(candidate)) != nil else { return nil }
         return candidate
     }
 
     /// Runs again right before deleting contents: the folder must still be an allowed ecosystem cache,
-    /// idle, free of Git data, and free of any refused local-artifact markers.
+    /// idle, free of Git data (or verified SwiftPM mirrors), and free of any refused local-artifact markers.
     static func verifyBeforeDeletion(_ candidate: CleanupCandidate, activity: CleanupActivity,
                                      now: Date = Date(),
                                      home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
@@ -108,11 +187,15 @@ enum EcosystemCacheInventory {
         guard !isBusy(rule, activity: activity) else {
             throw FeatureFailure(message: "\(rule.name) is in use. Close its builds and scan again.")
         }
-        let survey = try FolderSurvey.read(url, gitAllowedUnder: [])
-        guard survey.idle(at: now) >= minimumIdle else {
+        let survey = try FolderSurvey.read(url, gitAllowedUnder: rule.allowSwiftPMMirrors ? nil : [])
+        let idle = survey.idle(at: now)
+        guard idle >= rule.minimumIdle, rule.effectiveRisk(idle: idle) <= candidate.risk else {
             throw FeatureFailure(message: "\(rule.name) changed recently. Scan again after it is idle.")
         }
         try verifyNoRefusedNames(in: url, refused: rule.refuseNames)
+        if rule.allowSwiftPMMirrors {
+            try SwiftPMCheckoutGuard.verifyMirrorsDirectory(url)
+        }
     }
 
     private static func isBusy(_ rule: Rule, activity: CleanupActivity) -> Bool {

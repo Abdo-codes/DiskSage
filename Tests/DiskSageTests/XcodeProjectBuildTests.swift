@@ -72,4 +72,26 @@ struct XcodeProjectBuildTests {
             rule: .buildArtifacts, activity: .idle, cutoff: cutoff, policy: policy, handsOffWholeFolders: true)
         #expect(scan == nil)
     }
+
+    @Test func discoversIndividualXcodeArchivesAsReviewOnlyArchives() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let archiveRel = "Library/Developer/Xcode/Archives/2026-11-18/SwingCoach.xcarchive"
+        try f.write("\(archiveRel)/Info.plist", bytes: 128)
+        try f.write("\(archiveRel)/Products/Applications/SwingCoach.app/SwingCoach", bytes: 8_192)
+        let archiveURL = CleanupPath.fileURL(f.base.appending(path: archiveRel))
+        #expect(TemporaryBuildOutput.kind(of: archiveURL, home: f.base) == .xcodeArchive)
+        #expect(AgentWorkspaceDiscovery.folders(home: f.base).contains(archiveURL))
+
+        // Too recent at 12h; offered only at .medium risk at 30h and 30 days.
+        #expect(TemporaryBuildInspector.inspect(archiveURL, activity: .idle, now: f.later(hours: 12), home: f.base) == nil)
+        let after30h = try #require(TemporaryBuildInspector.inspect(archiveURL, activity: .idle, now: f.later(hours: 30), home: f.base))
+        #expect(after30h.category == .archive && after30h.risk == .medium && after30h.deletionMode == .item)
+        let after30d = try #require(TemporaryBuildInspector.inspect(archiveURL, activity: .idle, now: f.later(hours: 24 * 30), home: f.base))
+        #expect(after30d.risk == .medium)
+        try SafetyPolicy(home: f.base, now: f.later(hours: 24 * 30)).validate(after30d)
+        try TemporaryBuildInspector.verifyBeforeDeletion(after30d, activity: .idle, now: f.later(hours: 24 * 30), home: f.base)
+
+        let diag = PathDiagnostics.explain(archiveURL.path, activity: .idle, now: f.later(hours: 30), home: f.base)
+        #expect(diag.verdict == .eligible && diag.risk == "medium")
+    }
 }

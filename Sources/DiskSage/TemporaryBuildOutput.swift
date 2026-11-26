@@ -22,12 +22,18 @@ enum TemporaryBuildOutput {
         case codexSessionDay
         /// One project folder in Xcode's DerivedData: `<Project>-<28 letters>`.
         case xcodeProjectBuild
+        /// One `.xcarchive` bundle in `~/Library/Developer/Xcode/Archives/<date>/<app>.xcarchive`.
+        case xcodeArchive
         /// Device symbols for an older OS version, when a newer version for the same device is present.
         case olderDeviceSupport
     }
 
     static func xcodeDerivedData(home: URL) -> URL {
         CleanupPath.fileURL(home).appending(path: "Library/Developer/Xcode/DerivedData", directoryHint: .isDirectory)
+    }
+
+    static func xcodeArchives(home: URL) -> URL {
+        CleanupPath.fileURL(home).appending(path: "Library/Developer/Xcode/Archives", directoryHint: .isDirectory)
     }
 
     /// Xcode names a project folder `<Project>-<hash>`, with a 28-letter lowercase hash.
@@ -62,6 +68,13 @@ enum TemporaryBuildOutput {
         }
         if DeviceSupportVersion.roots(home: home).map(\.path).contains(url.deletingLastPathComponent().path) {
             return DeviceSupportVersion.isSuperseded(url) ? .olderDeviceSupport : nil
+        }
+        let archivesComponents = xcodeArchives(home: home).pathComponents
+        if url.pathComponents.count == archivesComponents.count + 2,
+           url.pathComponents.starts(with: archivesComponents),
+           url.lastPathComponent.lowercased().hasSuffix(".xcarchive"),
+           isRegularFile(url.appending(path: "Info.plist")) {
+            return .xcodeArchive
         }
         let claude = claudeRoot.pathComponents
         let documents = derivedDataRoots(home: home)[1].pathComponents
@@ -145,13 +158,16 @@ enum TemporaryBuildOutput {
         case .codexSessionDay: idle >= 7 * day ? .medium : nil
         // The compiled-files rule hands a project over after one day. Xcode rebuilds it, but that takes time.
         case .xcodeProjectBuild: idle >= 3 * day ? .low : (idle >= day ? .medium : nil)
+        // Archives hold app binaries and dSYMs for App Store symbolication: review only, never automatic.
+        case .xcodeArchive: idle >= day ? .medium : nil
         // Xcode copies the symbols again when a device with that version connects.
         case .olderDeviceSupport: idle >= day ? .low : nil
         }
     }
 
     static func category(_ kind: Kind) -> CandidateCategory {
-        [.scratchpad, .codexVisualizationDay, .codexSessionDay, .olderDeviceSupport].contains(kind) ? .cache : .build
+        if kind == .xcodeArchive { return .archive }
+        return [.scratchpad, .codexVisualizationDay, .codexSessionDay, .olderDeviceSupport].contains(kind) ? .cache : .build
     }
 
     static func reason(_ kind: Kind, idle: TimeInterval) -> String {
@@ -173,6 +189,8 @@ enum TemporaryBuildOutput {
             return "One day of Codex session transcripts with no changes for \(age). You cannot resume these sessions after deletion."
         case .xcodeProjectBuild:
             return "Xcode DerivedData for one project with no changes for \(age). The whole folder is deleted; Xcode builds it again."
+        case .xcodeArchive:
+            return "Xcode archive with no changes for \(age). Contains the built app and dSYMs for crash symbolication. Keep archives for versions still live on the App Store."
         case .olderDeviceSupport:
             return "Device symbols for an older OS version. A newer version for this device stays. Xcode copies them again if a device with this version connects."
         }

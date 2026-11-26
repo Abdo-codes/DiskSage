@@ -10,6 +10,7 @@ enum AgentWorkspaceDiscovery {
         let home = CleanupPath.fileURL(home)
         let found = codexDays(home: home) + topLevel() + taskBundles(home: home) +
             children(TemporaryBuildOutput.xcodeDerivedData(home: home)) +
+            children(TemporaryBuildOutput.xcodeArchives(home: home)).flatMap(children) +
             DeviceSupportVersion.roots(home: home).flatMap(children)
         return found.filter { TemporaryBuildOutput.kind(of: $0, home: home) != nil }
     }
