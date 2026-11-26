@@ -156,4 +156,49 @@ struct GeneratedCleanupTests {
             try GeneratedFileInventory.read(f.root, rule: .buildArtifacts, cutoff: f.cutoff, maximumEntries: 1)
         }
     }
+
+    @Test func batchedDeletionHandlesMixedDirectoriesAndRestoresPermissionsOncePerDirectory() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        let files = ["debug/a.o", "debug/mid/x.o", "debug/mid/y.o", "debug/z.o", "release/sub/p.o", "release/sub/q.o"]
+        for path in files { try f.write(path) }
+        let debugDir = f.root.appending(path: "debug")
+        let midDir = f.root.appending(path: "debug/mid")
+        #expect(chmod(midDir.path, 0o555) == 0)
+        #expect(chmod(debugDir.path, 0o555) == 0)
+        defer {
+            chmod(debugDir.path, 0o755)
+            chmod(midDir.path, 0o755)
+        }
+
+        let target = try #require(try f.candidate())
+        #expect(target.generatedSnapshot?.fileCount == files.count)
+        try f.delete(target)
+        #expect(files.allSatisfy { !f.exists($0) })
+        for dir in [debugDir, midDir] {
+            var info = stat()
+            #expect(lstat(dir.path, &info) == 0)
+            #expect(info.st_mode & 0o777 == 0o555)
+        }
+
+        chmod(debugDir.path, 0o755)
+        try f.write("release/one.o")
+        try f.write("release/two.o")
+        let releaseDir = f.root.appending(path: "release")
+        #expect(chmod(releaseDir.path, 0o555) == 0)
+        defer { chmod(releaseDir.path, 0o755) }
+
+        let targetWithFailure = try #require(try f.candidate())
+        do {
+            try f.delete(targetWithFailure, before: { index in
+                if index == 1 { throw FeatureFailure(message: "Injected mid-batch failure") }
+            })
+            Issue.record("Expected PartialCleanupFailure")
+        } catch let partial as PartialCleanupFailure {
+            #expect(partial.removedFiles == 1)
+        }
+        #expect(!f.exists("release/one.o") && f.exists("release/two.o"))
+        var releaseInfo = stat()
+        #expect(lstat(releaseDir.path, &releaseInfo) == 0)
+        #expect(releaseInfo.st_mode & 0o777 == 0o555)
+    }
 }

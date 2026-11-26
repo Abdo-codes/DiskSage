@@ -122,11 +122,33 @@ enum SecureFileDeleter {
         try removeChildren(of: targetFD, device: targetInfo.st_dev, displayPath: candidate.url.path, entryRemoved: entryRemoved)
 
         if candidate.deletionMode == .item || candidate.deletionMode == .projectCache {
-            guard unlinkat(parentFD, targetName, AT_REMOVEDIR) == 0 else {
-                throw SecureDeletionError.systemCall("Removing \(candidate.url.path)", errno)
+            if unlinkat(parentFD, targetName, AT_REMOVEDIR) != 0 {
+                let code = errno
+                guard code == EACCES, let original = makeOwnedDirectoryWritable(parentFD) else {
+                    throw SecureDeletionError.systemCall("Removing \(candidate.url.path)", code)
+                }
+                let status = unlinkat(parentFD, targetName, AT_REMOVEDIR), removalCode = errno
+                let restored = fchmod(parentFD, original), restoreCode = errno
+                guard restored == 0 else {
+                    throw SecureDeletionError.systemCall("Restoring permissions on parent of \(candidate.url.path)", restoreCode)
+                }
+                guard status == 0 else {
+                    throw SecureDeletionError.systemCall("Removing \(candidate.url.path)", removalCode)
+                }
             }
             entryRemoved()
         }
+    }
+
+    /// Read-only cache directories (e.g., Go module cache / SwiftPM downloads) are common.
+    /// Never change ACLs, flags, or another user's permissions.
+    private static func makeOwnedDirectoryWritable(_ fd: Int32) -> mode_t? {
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(),
+              info.st_mode & S_IWUSR == 0, info.st_flags == 0 else { return nil }
+        let original = info.st_mode & 0o7777
+        guard fchmod(fd, original | S_IWUSR) == 0 else { return nil }
+        return original
     }
 
     static func openDirectoryChain(_ components: [String]) throws -> Int32 {
@@ -156,6 +178,22 @@ enum SecureFileDeleter {
         }
         defer { closedir(directory) }
 
+        var restoredMode: mode_t?
+        defer { if let original = restoredMode { _ = fchmod(directoryFD, original) } }
+
+        func unlinkEntry(_ name: String, flags: Int32) throws {
+            if unlinkat(directoryFD, name, flags) == 0 { return }
+            let code = errno
+            guard code == EACCES, restoredMode == nil,
+                  let original = makeOwnedDirectoryWritable(directoryFD) else {
+                throw SecureDeletionError.systemCall("Removing \(displayPath)/\(name)", code)
+            }
+            restoredMode = original
+            guard unlinkat(directoryFD, name, flags) == 0 else {
+                throw SecureDeletionError.systemCall("Removing \(displayPath)/\(name)", errno)
+            }
+        }
+
         while let entry = readdir(directory) {
             let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
                 pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
@@ -184,15 +222,18 @@ enum SecureFileDeleter {
                     close(childFD)
                     throw error
                 }
-                guard unlinkat(directoryFD, name, AT_REMOVEDIR) == 0 else {
-                    throw SecureDeletionError.systemCall("Removing \(displayPath)/\(name)", errno)
-                }
+                try unlinkEntry(name, flags: AT_REMOVEDIR)
             } else {
-                guard unlinkat(directoryFD, name, 0) == 0 else {
-                    throw SecureDeletionError.systemCall("Removing \(displayPath)/\(name)", errno)
-                }
+                try unlinkEntry(name, flags: 0)
             }
             entryRemoved()
+        }
+
+        if let original = restoredMode {
+            restoredMode = nil
+            guard fchmod(directoryFD, original) == 0 else {
+                throw SecureDeletionError.systemCall("Restoring permissions on \(displayPath)", errno)
+            }
         }
     }
 }
