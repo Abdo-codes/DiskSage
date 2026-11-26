@@ -71,7 +71,7 @@ struct ScheduleSettingsView: View {
 private struct ScheduleRow: View {
     let schedule: CleanupSchedule
     let isRunning: Bool
-    let setEnabled: (Bool) -> Void
+    let setEnabled: @MainActor @Sendable (Bool) -> Void
     let edit: () -> Void
     let remove: () -> Void
 

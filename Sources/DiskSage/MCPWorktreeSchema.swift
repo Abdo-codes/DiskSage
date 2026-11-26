@@ -1,8 +1,8 @@
 import Foundation
 
 enum MCPWorktreeSchema {
-    static let opaque: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 64]
-    static let ids: [String: Any] = ["type": "array", "items": opaque, "maxItems": 300, "uniqueItems": true]
+    static var opaque: [String: Any] { ["type": "string", "minLength": 1, "maxLength": 64] }
+    static var ids: [String: Any] { ["type": "array", "items": opaque, "maxItems": 300, "uniqueItems": true] }
     static var definitions: [MCPManagementSchema.Definition] {
         [.init(name: "refresh_worktrees", description: "Refresh local Git evidence in folders previously approved in Git Worktrees. Optional repository_root limits discovery to one existing repository within approved folders, retaining the same safety policy. It never grants folder access. No fetch or deletion. Returns a job; poll get_job.", properties: ["repository_root": ["type": "string", "minLength": 1, "maxLength": 4096]], readOnly: true, requestID: true),
          .init(name: "list_worktrees", description: "Read the latest worktree inventory, timestamps and safety blockers. First refresh_worktrees. Remote evidence is cached, with unknown freshness.", properties: MCPManagementSchema.page, readOnly: true),
