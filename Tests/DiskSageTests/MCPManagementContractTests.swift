@@ -7,6 +7,7 @@ struct MCPManagementContractTests {
         let expected: Set<String> = ["get_status", "scan", "clean_low_risk", "get_job", "get_dashboard", "list_candidates",
             "set_selection", "delete_candidates", "cancel_operation", "dismiss_confirmation", "list_schedules",
             "create_schedule", "update_schedule", "pause_schedule", "remove_schedule", "get_settings", "update_settings",
+            "get_project_cache_rules", "update_project_cache_rules",
             "list_advisors", "list_models", "request_advice", "get_history", "get_logs", "get_mcp_setup", "open_window",
             "reveal_candidate", "explain_path", "quit_app", "refresh_worktrees", "list_worktrees", "inspect_worktree",
             "preview_worktree_removal", "preview_unused_worktrees", "remove_worktrees", "set_worktree_protected"]
@@ -33,6 +34,10 @@ struct MCPManagementContractTests {
         ("pause_schedule", #"{"request_id":"00000000-0000-0000-0000-000000000001","schedule_id":"bad","expected_revision":1}"#),
         ("remove_schedule", #"{"request_id":"00000000-0000-0000-0000-000000000001","schedule_id":"00000000-0000-0000-0000-000000000002","expected_revision":-1}"#),
         ("update_settings", #"{"request_id":"00000000-0000-0000-0000-000000000001","settings":{"unknown_permission":true}}"#),
+        ("list_candidates", #"{"category":"unknown"}"#),
+        ("list_candidates", #"{"sort":"random"}"#),
+        ("update_project_cache_rules", #"{"request_id":"00000000-0000-0000-0000-000000000001","rules":{"unknown_field":true}}"#),
+        ("update_project_cache_rules", #"{"request_id":"00000000-0000-0000-0000-000000000001","rules":{"quiet_hours":0}}"#),
         ("delete_candidates", #"{"request_id":"00000000-0000-0000-0000-000000000001","candidate_ids":[],"confirmed":true}"#),
         ("get_logs", #"{"request_id":"00000000-0000-0000-0000-000000000001","limit":201}"#),
         ("approve_management", #"{"request_id":"00000000-0000-0000-0000-000000000001"}"#)

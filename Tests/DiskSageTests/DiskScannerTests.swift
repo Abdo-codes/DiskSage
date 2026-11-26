@@ -104,6 +104,24 @@ struct DiskScannerTests {
         #expect(report.warnings.isEmpty)
     }
 
+    @Test func configurableMaximumCandidatesAllowsOver100WhileDefaultCapsAt100() async throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        var locations: [DiskScanner.Location] = []
+        for index in 0..<105 {
+            let folder = f.base.appending(path: "Developer/p-\(index)/.build", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(repeating: 1, count: 64).write(to: folder.appending(path: "artifact"))
+            locations.append(.init(url: folder, name: "p-\(index)/.build", category: .build,
+                                   risk: .low, reason: "Fixture", deletionMode: .item))
+        }
+        let defaultCandidates = try await DiskScanner(locations: locations, activity: { .idle }, home: f.base).scan()
+        #expect(defaultCandidates.count == 100)
+
+        let expanded = try await DiskScanner(locations: locations, activity: { .idle },
+                                             maximumCandidates: 120, home: f.base).scan()
+        #expect(expanded.count == 105)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DISKSAGE_LIVE_SCAN_TEST"] == "1"))
     func liveScanCandidatesPassPolicyOnThisMac() async throws {
         let candidates = try await DiskScanner().scan()

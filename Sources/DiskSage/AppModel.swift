@@ -46,6 +46,7 @@ final class AppModel {
     }
     func requestDeletion(_ targets: [CleanupCandidate]) { store.send(.requestDeletion(targets)) }
     func requestLowRiskCleanup() { store.send(.requestLowRiskCleanup) }
+    func keepCandidates(_ targets: [CleanupCandidate]) { store.send(.keepCandidates(targets)) }
     func confirmDeletion(_ request: DeletionRequest) { store.send(.confirmDeletion(request.id)) }
     func cancelDeletionRequest() { store.send(.dismissConfirmation) }
     func cancelCurrentOperation() { store.send(.cancelOperation) }

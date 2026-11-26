@@ -45,6 +45,11 @@ indirect enum ToolValue: Codable, Equatable, Sendable {
 }
 
 struct ManagementApproval: Equatable, Sendable, Identifiable {
+    struct ProjectCacheRulesUpdate: Equatable, Sendable {
+        let updated: ProjectCacheRulesLoader.UserConfig
+        let expectedRawData: Data?
+    }
+
     let id: UUID
     let request: AgentToolRequest
     let title: String
@@ -53,6 +58,7 @@ struct ManagementApproval: Equatable, Sendable, Identifiable {
     var previousSchedule: CleanupSchedule?
     var previousSettings: [String: ToolValue]?
     var configuration: AgentConfiguration?
+    var projectCacheRulesUpdate: ProjectCacheRulesUpdate? = nil
 }
 
 struct ToolMutationReceipt: Codable, Equatable, Sendable {

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings for `KeepRules`. DiskSage never offers or deletes what these rules keep.
@@ -8,7 +9,11 @@ struct KeepRulesSettingsView: View {
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Kept paths, one per line")
+                HStack {
+                    Text("Kept paths, one per line")
+                    Spacer()
+                    Button("Add Folder…", systemImage: "folder.badge.plus", action: addFolders)
+                }
                 TextEditor(text: $paths)
                     .font(.body.monospaced())
                     .frame(minHeight: 64)
@@ -25,5 +30,15 @@ struct KeepRulesSettingsView: View {
         } footer: {
             Text("DiskSage never offers or deletes a kept path, anything inside it, or a folder that contains it. Simulators whose names match a pattern stay.")
         }
+    }
+
+    private func addFolders() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Keep"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        paths = KeepRules.appending(urls: panel.urls, to: paths)
     }
 }

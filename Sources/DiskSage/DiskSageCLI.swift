@@ -199,7 +199,7 @@ enum DiskSageCLI {
 
     static func run(
         _ command: Command,
-        scan: @Sendable () async throws -> ScanReport = { try await DiskScanner().report() },
+        scan: @Sendable () async throws -> ScanReport = { try await DiskScanner(maximumCandidates: 1_000).report() },
         explain: @Sendable (String) async throws -> PathDiagnostic = { path in
             let activity = try CleanupActivity.capture()
             return PathDiagnostics.explain(path, activity: activity)

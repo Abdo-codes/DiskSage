@@ -37,7 +37,10 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var managementWindow: NSWindow?
     private var presentedManagementID: UUID?
     private var onboardingWindow: NSWindow?
+    private var windowMenu: NSMenu?
     private let showOnboardingAtLaunch: Bool
+
+    static let displayMenuItemTag = 4_201
 
     init(model: AppModel, showOnboardingAtLaunch: Bool = false) {
         self.model = model
@@ -50,6 +53,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         installMainMenu()
         NotificationCenter.default.addObserver(self, selector: #selector(openToolWindow(_:)), name: .diskSageOpenWindow, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(recheckCleanupPreferences), name: .diskSageSettingsChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(recheckDiskSpace), name: NSWorkspace.didWakeNotification, object: nil)
         let notifications = DiskSpaceNotificationObserver { [weak self] in self?.recheckDiskSpace() }
         diskSpaceNotifications = notifications
@@ -63,6 +67,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
             }
             guard self.presentedDeletionConfirmationID != request.id else { return }
             self.presentedDeletionConfirmationID = request.id
+            UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
             self.showReview()
         }
         do {
@@ -108,6 +113,11 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         }
     }
 
+    @objc private func showCacheReview() {
+        UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
+        showReview()
+    }
+
     @objc private func showReview() {
         dashboard?.hide()
         if reviewWindow == nil {
@@ -121,6 +131,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     }
 
     @objc private func cleanLowRiskItems() {
+        UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
         showReview()
         model.requestLowRiskCleanup()
     }
@@ -129,10 +140,10 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         dashboard?.hide()
         if settingsWindow == nil {
             let size = SettingsView.windowSize
-            let window = makeWindow(title: "DiskSage Settings", width: size.width, height: size.height, resizable: false)
-            window.contentViewController = NSHostingController(rootView:
-                SettingsView(model: model))
-            window.setContentSize(size)
+            let window = makeWindow(title: "DiskSage Settings", width: size.width, height: size.height, resizable: true)
+            HostedWindowSizing.configure(window, content: SettingsView(model: model),
+                minimum: SettingsView.minimumWindowSize, preferred: size, frameName: "Settings")
+            window.delegate = self
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -200,7 +211,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         menu.addItem(appItem)
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
-        let review = NSMenuItem(title: "Cleanup Review…", action: #selector(showReview), keyEquivalent: "1")
+        let review = NSMenuItem(title: "Cleanup Review…", action: #selector(showCacheReview), keyEquivalent: "1")
         review.target = self
         fileMenu.addItem(review)
         let fileClean = NSMenuItem(title: "Clean Low-Risk Items…", action: #selector(cleanLowRiskItems), keyEquivalent: "")
@@ -223,19 +234,50 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
-        for screen in NSScreen.screens {
-            let item = NSMenuItem(title: "Dashboard on \(screen.localizedName)",
-                                  action: #selector(showDashboardOnDisplay(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
-            windowMenu.addItem(item)
-        }
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        self.windowMenu = windowMenu
+        rebuildDisplayMenuItems()
         windowItem.submenu = windowMenu
         menu.addItem(windowItem)
         NSApp.mainMenu = menu
         NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func screenParametersDidChange() {
+        rebuildDisplayMenuItems()
+    }
+
+    private func rebuildDisplayMenuItems() {
+        guard let windowMenu else { return }
+        let screens = NSScreen.screens.map {
+            (name: $0.localizedName, displayID: $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+        }
+        Self.rebuildDisplayMenuItems(in: windowMenu, screens: screens, target: self, action: #selector(showDashboardOnDisplay(_:)))
+    }
+
+    static func rebuildDisplayMenuItems(
+        in menu: NSMenu,
+        screens: [(name: String, displayID: NSNumber?)],
+        target: AnyObject?,
+        action: Selector
+    ) {
+        for item in menu.items where item.tag == displayMenuItemTag {
+            menu.removeItem(item)
+        }
+        let insertionBase: Int
+        if let firstSeparator = menu.items.firstIndex(where: \.isSeparatorItem) {
+            insertionBase = firstSeparator + 1
+        } else {
+            insertionBase = menu.items.count
+        }
+        for (offset, screen) in screens.enumerated() {
+            let item = NSMenuItem(title: "Dashboard on \(screen.name)", action: action, keyEquivalent: "")
+            item.tag = displayMenuItemTag
+            item.target = target
+            item.representedObject = screen.displayID
+            menu.insertItem(item, at: insertionBase + offset)
+        }
     }
 
     @objc private func showDashboardOnDisplay(_ item: NSMenuItem) {
@@ -293,6 +335,17 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard sender === settingsWindow else { return frameSize }
+        return Self.clampedSettingsFrameSize(for: sender, proposed: frameSize)
+    }
+
+    static func clampedSettingsFrameSize(for window: NSWindow, proposed frameSize: NSSize) -> NSSize {
+        let minimumFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: SettingsView.minimumWindowSize)).size
+        return NSSize(width: max(frameSize.width, minimumFrame.width),
+                      height: max(frameSize.height, minimumFrame.height))
+    }
+
     func windowWillClose(_ notification: Notification) {
         if notification.object as? NSWindow === reviewWindow, !model.worktrees.removing {
             store.send(.worktrees(.dismiss))
@@ -305,7 +358,7 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     @objc private func openToolWindow(_ notification: Notification) {
         switch notification.object as? String {
-        case "review": showReview()
+        case "review": UserDefaults.standard.set("caches", forKey: "reviewSelectedSection"); showReview()
         case "worktrees": UserDefaults.standard.set("worktrees", forKey: "reviewSelectedSection"); showReview()
         case "history": showHistory()
         case "settings": showSettings()

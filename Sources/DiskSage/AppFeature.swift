@@ -81,6 +81,7 @@ struct AppFeature {
         case cleanupFinished(UUID, CleanupReport, DashboardSnapshot)
         case requestDeletion([CleanupCandidate])
         case requestLowRiskCleanup
+        case keepCandidates([CleanupCandidate])
         case confirmDeletion(UUID)
         case dismissConfirmation
         case cancelOperation
@@ -146,6 +147,19 @@ struct AppFeature {
                  .setScheduleEnabled, .removeSchedule, .scheduledScanFinished:
                 return reduceSchedules(state: &state, action: action)
             case let .selectionChanged(selection): state.selection = selection; return .none
+            case let .keepCandidates(targets):
+                guard !targets.isEmpty, !state.isCleaning, state.pendingDeletionRequest == nil else { return .none }
+                let addedRules = KeepRules(paths: targets.map { CleanupPath.fileURL($0.url).path })
+                let removedIDs = Set(state.candidates.filter { addedRules.keeps($0.url) }.map(\.id))
+                state.candidates.removeAll { removedIDs.contains($0.id) }
+                state.selection.subtract(removedIDs)
+                for id in removedIDs { state.recommendations[id] = nil }
+                state.cleanupFailures.removeAll { removedIDs.contains($0.candidate.id) }
+                state.statusMessage = targets.count == 1
+                    ? "Kept \(targets[0].name). It will be excluded from future scans."
+                    : "Kept \(targets.count) items. They will be excluded from future scans."
+                let urls = targets.map(\.url)
+                return .run { [management] _ in await management.keepPaths(urls) }
             case let .presentationError(error): state.errorMessage = error; return .none
             case let .toolConnectionChanged(error): state.agentToolConnectionError = error; return .none
             case .refreshDashboard: return refreshDashboard(state: &state)

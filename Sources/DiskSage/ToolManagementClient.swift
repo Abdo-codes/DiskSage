@@ -10,6 +10,12 @@ struct ToolManagementClient: Sendable {
     var save: @Sendable ([CleanupSchedule], ToolMutationReceipt) throws -> Void
     var read: @Sendable (String, [String: ToolValue]) async throws -> ToolValue
     var present: @Sendable (String, URL?) async throws -> Void
+    var keepPaths: @Sendable ([URL]) async -> Void = { _ in }
+    var readProjectCacheRules: @Sendable () -> ToolValue = { .null }
+    var loadProjectCacheRulesSnapshot: @Sendable () throws -> ProjectCacheRulesLoader.ConfigSnapshot = { .init(config: .init(), rawData: nil) }
+    var saveProjectCacheRules: @Sendable (ProjectCacheRulesLoader.UserConfig, Data?) async throws -> Data = { _, _ in Data() }
+    var projectCacheRulesPath: @Sendable () -> String = { "" }
+    var projectCacheRulesHome: @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser }
 }
 
 extension ToolManagementClient: DependencyKey {
@@ -63,10 +69,39 @@ extension ToolManagementClient: DependencyKey {
                     NotificationCenter.default.post(name: .diskSageOpenWindow, object: screen)
                 }
             }
+        }, keepPaths: { urls in
+            await MainActor.run { _ = KeepRules.keep(urls) }
+        }, readProjectCacheRules: {
+            ToolProjectCacheRules.snapshotValue()
+        }, loadProjectCacheRulesSnapshot: {
+            try ProjectCacheRulesLoader.loadConfigSnapshot(from: ProjectCacheRulesLoader.configURL())
+        }, saveProjectCacheRules: { config, expected in
+            let written = try ProjectCacheRulesLoader.save(config, expectedExistingData: .some(expected))
+            await MainActor.run {
+                NotificationCenter.default.post(name: .diskSageProjectCacheRulesChanged, object: nil)
+            }
+            return written
+        }, projectCacheRulesPath: {
+            ProjectCacheRulesLoader.configURL().path
+        }, projectCacheRulesHome: {
+            FileManager.default.homeDirectoryForCurrentUser
         })
     static let testValue = Self(settings: { ToolSettings.entries.mapValues(\.fallback) },
         applySettings: { _ in }, grantConsent: { _ in }, identity: { _ in FileIdentity(device: 1, inode: 2) },
-        receipt: { _ in nil }, save: { _, _ in }, read: { _, _ in .array([]) }, present: { _, _ in })
+        receipt: { _ in nil }, save: { _, _ in }, read: { _, _ in .array([]) }, present: { _, _ in },
+        keepPaths: { _ in },
+        readProjectCacheRules: {
+            ToolProjectCacheRules.snapshotValue(
+                config: .init(),
+                exists: false,
+                configPath: "/tmp/rules.json",
+                home: URL(fileURLWithPath: "/tmp", isDirectory: true)
+            )
+        },
+        loadProjectCacheRulesSnapshot: { .init(config: .init(), rawData: nil) },
+        saveProjectCacheRules: { _, _ in Data() },
+        projectCacheRulesPath: { "/tmp/rules.json" },
+        projectCacheRulesHome: { FileManager.default.homeDirectoryForCurrentUser })
 }
 
 extension DependencyValues {

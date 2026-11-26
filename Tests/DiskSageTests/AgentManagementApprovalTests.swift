@@ -91,4 +91,90 @@ struct AgentManagementApprovalTests {
         #expect(settings.value["claude_metadata_consent"]?.bool == false)
         #expect(store.agentToolJobs[request.requestID!]?.phase == .failed)
     }
+
+    @Test(arguments: [false, true])
+    func projectCacheRulesUpdateRequiresApprovalAndSavesOnApprove(approve: Bool) async throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let extra = try f.folder("Work")
+        let rulesURL = f.base.appending(path: ".config/disksage/rules.json")
+
+        let store = ManagementTestSupport.store {
+            $0.management.projectCacheRulesHome = { f.base }
+            $0.management.projectCacheRulesPath = { rulesURL.path }
+            $0.management.loadProjectCacheRulesSnapshot = { try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesURL) }
+            $0.management.saveProjectCacheRules = { config, expected in
+                try ProjectCacheRulesLoader.save(config, to: rulesURL, home: f.base, expectedExistingData: .some(expected))
+            }
+            $0.management.readProjectCacheRules = { ToolProjectCacheRules.snapshotValue(configURL: rulesURL, home: f.base) }
+        }
+
+        let request = try ManagementTestSupport.request("update_project_cache_rules", [
+            "rules": [
+                "quiet_hours": 48,
+                "extra_roots": ["~/Work"],
+                "names": [".cache-x"],
+                "skip": ["vendor"],
+            ],
+        ])
+        await store.send(.agentToolRequest(request)).finish()
+        #expect(!FileManager.default.fileExists(atPath: rulesURL.path))
+        #expect(store.pendingManagementApproval?.id == request.requestID)
+        #expect(store.agentToolJobs[request.requestID!]?.phase == .awaitingConfirmation)
+
+        await store.send(approve ? .approveManagement(request.requestID!) : .rejectManagement(request.requestID!)).finish()
+        #expect(store.agentToolJobs[request.requestID!]?.phase == (approve ? .succeeded : .cancelled))
+        if approve {
+            let loaded = try ProjectCacheRulesLoader.loadConfig(from: rulesURL)
+            #expect(loaded.quietHours == 48)
+            #expect(loaded.extraRoots == ["~/Work"])
+            #expect(loaded.names == [".cache-x"])
+            #expect(loaded.skip == ["vendor"])
+            let snapshot = ManagementTestSupport.result(store)
+            #expect(snapshot["exists"]?.bool == true)
+            let effectiveRoots = snapshot["effective"]?.object?["extra_roots"]?.array?.compactMap(\.string) ?? []
+            #expect(effectiveRoots == [CleanupPath.fileURL(extra).path])
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: rulesURL.path))
+        }
+    }
+
+    @Test func projectCacheRulesRejectsStaleConflictAndInvalidRules() async throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let rulesURL = f.base.appending(path: ".config/disksage/rules.json")
+        _ = try ProjectCacheRulesLoader.save(.init(quietHours: 36), to: rulesURL, home: f.base)
+
+        let store = ManagementTestSupport.store {
+            $0.management.projectCacheRulesHome = { f.base }
+            $0.management.projectCacheRulesPath = { rulesURL.path }
+            $0.management.loadProjectCacheRulesSnapshot = { try ProjectCacheRulesLoader.loadConfigSnapshot(from: rulesURL) }
+            $0.management.saveProjectCacheRules = { config, expected in
+                try ProjectCacheRulesLoader.save(config, to: rulesURL, home: f.base, expectedExistingData: .some(expected))
+            }
+            $0.management.readProjectCacheRules = { ToolProjectCacheRules.snapshotValue(configURL: rulesURL, home: f.base) }
+        }
+
+        // Invalid rules are rejected immediately without awaiting approval.
+        let invalidRulePatches: [[String: Any]] = [
+            ["extra_roots": ["~/Library/Caches"]],
+            ["names": [".git"]],
+            ["skip": ["a/b"]],
+            ["reset": true, "quiet_hours": 12],
+        ]
+        for (offset, badRules) in invalidRulePatches.enumerated() {
+            let bad = try ManagementTestSupport.request("update_project_cache_rules", ["rules": badRules], id: 200 + offset)
+            await store.send(.agentToolRequest(bad)).finish()
+            #expect(store.pendingManagementApproval == nil)
+            #expect(store.agentToolReply?.error != nil)
+        }
+
+        // External write invalidates a pending approval.
+        let update = try ManagementTestSupport.request("update_project_cache_rules", ["rules": ["quiet_hours": 72]], id: 300)
+        await store.send(.agentToolRequest(update)).finish()
+        #expect(store.pendingManagementApproval?.id == update.requestID)
+        _ = try ProjectCacheRulesLoader.save(.init(skip: ["archive"], quietHours: 96), to: rulesURL, home: f.base)
+        await store.send(.approveManagement(update.requestID!)).finish()
+        #expect(store.agentToolJobs[update.requestID!]?.phase == .failed)
+        let preserved = try ProjectCacheRulesLoader.loadConfig(from: rulesURL)
+        #expect(preserved.quietHours == 96 && preserved.skip == ["archive"])
+    }
 }

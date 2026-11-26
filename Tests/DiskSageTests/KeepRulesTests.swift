@@ -1,3 +1,4 @@
+import ComposableArchitecture
 import Darwin
 import Foundation
 import Testing
@@ -116,5 +117,59 @@ struct KeepRulesTests {
         #expect(throws: (any Error).self) {
             try ScheduledFolderPolicy.validate(try schedule("\(previews)/\(kept)/data"), keep: rules, home: f.base, simctl: run)
         }
+    }
+
+    @MainActor
+    @Test func appendingAndKeepingCandidatesDeduplicatesFormatsTildeAndRemovesMatches() async throws {
+        let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+        let folder = home.appending(path: "Developer/app/.build")
+        let outside = URL(fileURLWithPath: "/private/tmp/external-cache")
+
+        #expect(KeepRules.displayPath(folder, home: home) == "~/Developer/app/.build")
+        #expect(KeepRules.displayPath(outside, home: home) == "/private/tmp/external-cache")
+
+        let merged = KeepRules.appending(
+            urls: [home.appending(path: "Developer/APP/.build"), folder, outside, URL(fileURLWithPath: "/")],
+            to: " ~/Developer/app/.build \n",
+            home: home
+        )
+        #expect(merged == "~/Developer/app/.build\n/private/tmp/external-cache")
+
+        let domain = "DiskSage.KeepRulesWriteTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        #expect(KeepRules.keep([folder], defaults: defaults, home: home))
+        #expect(!KeepRules.keep([folder], defaults: defaults, home: home))
+        #expect(defaults.string(forKey: KeepRules.pathsKey) == "~/Developer/app/.build")
+
+        let parent = CleanupCandidate(
+            url: home.appending(path: "Developer/app"),
+            name: "app", category: .build, size: 100, risk: .low, reason: "Parent"
+        )
+        let target = CleanupCandidate(
+            url: folder,
+            name: "app/.build", category: .build, size: 50, risk: .low, reason: "Target"
+        )
+        let unrelated = CleanupCandidate(
+            url: home.appending(path: "Developer/other/.build"),
+            name: "other/.build", category: .build, size: 25, risk: .low, reason: "Other"
+        )
+        var initial = AppFeature.State()
+        initial.candidates = [parent, target, unrelated]
+        initial.selection = [target.id, unrelated.id]
+        initial.recommendations = [target.id: .init(id: target.id, decision: .review, rationale: "r")]
+        initial.cleanupFailures = [CleanupItemResult(candidate: target, removedBytes: 0, errorDescription: "err")]
+
+        let recordedURLs = LockIsolated<[URL]>([])
+        let store = ManagementTestSupport.store(initial) {
+            $0.management.keepPaths = { urls in recordedURLs.setValue(urls) }
+        }
+        await store.send(.keepCandidates([target])).finish()
+        #expect(recordedURLs.value == [folder])
+        #expect(store.candidates.map(\.id) == [unrelated.id])
+        #expect(store.selection == [unrelated.id])
+        #expect(store.recommendations[target.id] == nil)
+        #expect(store.cleanupFailures.isEmpty)
+        #expect(store.statusMessage.contains("Kept app/.build"))
     }
 }

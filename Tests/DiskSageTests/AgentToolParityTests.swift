@@ -130,4 +130,45 @@ struct AgentToolParityTests {
         #expect(store.agentToolJobs[FeatureTestSupport.id(0)]?.phase == .loading)
         #expect(store.agentToolJobs[FeatureTestSupport.id(1)] == nil && store.managedRequests[FeatureTestSupport.id(1)] == nil)
     }
+
+    @Test func listCandidatesSupportsCategoryAndSortAndReadsProjectCacheRules() async throws {
+        let smallBuild = CleanupCandidate(
+            url: URL(fileURLWithPath: "/fixture/alpha/.build"),
+            name: "Alpha build", category: .build, size: 100, risk: .low, reason: "Build"
+        )
+        let bigCache = CleanupCandidate(
+            url: URL(fileURLWithPath: "/fixture/cargo"),
+            name: "Cargo cache", category: .cache, size: 900, risk: .low, reason: "Cache"
+        )
+        let mediumSim = CleanupCandidate(
+            url: URL(fileURLWithPath: "/fixture/sim"),
+            name: "iPhone Sim", category: .simulator, size: 500, risk: .medium, reason: "Sim"
+        )
+        var state = AppFeature.State()
+        state.candidates = [smallBuild, bigCache, mediumSim]
+
+        let rulesSnapshot = ToolValue.object([
+            "config_path": .string("/fixture/rules.json"),
+            "exists": .bool(true),
+            "effective": .object(["quiet_hours": .number(48)]),
+        ])
+        let store = ManagementTestSupport.store(state) {
+            $0.management.readProjectCacheRules = { rulesSnapshot }
+        }
+
+        await store.send(.agentToolRequest(try ManagementTestSupport.request("list_candidates", ["category": "cache"]))).finish()
+        let cacheOnly = try #require(store.agentToolReply?.data?.object?["candidates"]?.array)
+        #expect(cacheOnly.map { $0.object?["id"]?.string } == [bigCache.id.uuidString])
+
+        await store.send(.agentToolRequest(try ManagementTestSupport.request("list_candidates", ["sort": "name"]))).finish()
+        let byName = try #require(store.agentToolReply?.data?.object?["candidates"]?.array)
+        #expect(byName.map { $0.object?["name"]?.string } == ["Alpha build", "Cargo cache", "iPhone Sim"])
+
+        await store.send(.agentToolRequest(try ManagementTestSupport.request("list_candidates", ["sort": "risk"]))).finish()
+        let byRisk = try #require(store.agentToolReply?.data?.object?["candidates"]?.array)
+        #expect(byRisk.map { $0.object?["id"]?.string } == [bigCache.id.uuidString, smallBuild.id.uuidString, mediumSim.id.uuidString])
+
+        await store.send(.agentToolRequest(try ManagementTestSupport.request("get_project_cache_rules"))).finish()
+        #expect(store.agentToolReply?.data == rulesSnapshot)
+    }
 }

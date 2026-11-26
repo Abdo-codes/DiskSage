@@ -136,4 +136,32 @@ struct DiskSageCLITests {
         let decoded = try JSONDecoder().decode(PathDiagnostic.self, from: Data(json.stdout.utf8))
         #expect(decoded == sample)
     }
+
+    @Test func cliScanHonorsLimitsAbove100WithExpandedScannerCapacity() async throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        var locations: [DiskScanner.Location] = []
+        for index in 0..<115 {
+            let folder = f.base.appending(path: "Developer/cli-\(index)/.build", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(repeating: 1, count: 64).write(to: folder.appending(path: "artifact"))
+            locations.append(.init(url: folder, name: "cli-\(index)/.build", category: .build,
+                                   risk: .low, reason: "Fixture", deletionMode: .item))
+        }
+        let scanner = DiskScanner(locations: locations, activity: { .idle }, maximumCandidates: 1_000, home: f.base)
+        let result = await DiskSageCLI.run(
+            .scan(.init(json: true, limit: 115)),
+            scan: { try await scanner.report() },
+            freeSpace: { 10_000_000_000 },
+            home: f.base,
+            now: f.start,
+            version: "0.3.0"
+        )
+        #expect(result.exitCode == 0)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(DiskSageCLI.ScanJSON.self, from: Data(result.stdout.utf8))
+        #expect(decoded.totalScannedCount == 115)
+        #expect(decoded.matchedCount == 115)
+        #expect(decoded.candidates.count == 115)
+    }
 }

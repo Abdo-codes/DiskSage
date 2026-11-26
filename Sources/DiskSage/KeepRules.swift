@@ -31,6 +31,47 @@ struct KeepRules: Sendable, Equatable {
         lines(text, separators: "\n").filter { !($0.hasPrefix("/") || $0.hasPrefix("~/")) || $0 == "/" }
     }
 
+    static func displayPath(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let canonicalTarget = CleanupPath.fileURL(url)
+        let homePath = canonicalHome.path
+        if canonicalTarget.path.hasPrefix(homePath + "/") {
+            return "~/" + canonicalTarget.path.dropFirst(homePath.count + 1)
+        }
+        return canonicalTarget.path
+    }
+
+    static func appending(urls: [URL], to existingText: String,
+                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        let canonicalHome = CleanupPath.fileURL(home)
+        var existingLines = lines(existingText, separators: "\n")
+        var seenKeys = Set(existingLines.compactMap { line -> String? in
+            let expanded = line.hasPrefix("~/") ? canonicalHome.path + line.dropFirst(1) : line
+            guard expanded.hasPrefix("/"), expanded != "/" else { return nil }
+            return Self.key(CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path)
+        })
+        for url in urls {
+            let formatted = displayPath(url, home: canonicalHome)
+            let canonical = CleanupPath.fileURL(url).path
+            guard !canonical.isEmpty, canonical != "/" else { continue }
+            let k = Self.key(canonical)
+            guard seenKeys.insert(k).inserted else { continue }
+            existingLines.append(formatted)
+        }
+        return existingLines.joined(separator: "\n")
+    }
+
+    @discardableResult
+    static func keep(_ urls: [URL], defaults: UserDefaults = .standard,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let existing = defaults.string(forKey: pathsKey) ?? ""
+        let updated = appending(urls: urls, to: existing, home: home)
+        guard updated != existing else { return false }
+        defaults.set(updated, forKey: pathsKey)
+        NotificationCenter.default.post(name: .diskSageSettingsChanged, object: nil)
+        return true
+    }
+
     /// True when the item is a kept path, is inside one, or contains one.
     /// Paths compare without case, because the default APFS volume ignores case.
     func keeps(_ url: URL) -> Bool {

@@ -290,7 +290,7 @@ enum ProjectCacheRulesLoader {
         }
     }
 
-    private static func merge(base: ProjectCacheRules, document: UserConfig) throws -> ProjectCacheRules {
+    static func merge(base: ProjectCacheRules, document: UserConfig) throws -> ProjectCacheRules {
         var merged = base
 
         if let names = document.names {
