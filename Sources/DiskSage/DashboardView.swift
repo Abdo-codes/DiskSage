@@ -60,7 +60,12 @@ private struct DashboardActions: View {
         let presentation = model.dashboardPresentation
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                if presentation.primaryAction == .scan { model.scan() } else { openReview() }
+                if presentation.primaryAction == .scan {
+                    model.scan()
+                } else {
+                    UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
+                    openReview()
+                }
             } label: {
                 HStack {
                     Text(presentation.primaryTitle)
@@ -71,6 +76,7 @@ private struct DashboardActions: View {
             }
             .modifier(DashboardActionStyle(prominent: true)).controlSize(.large)
             Button {
+                UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
                 openReview()
                 model.requestLowRiskCleanup()
             } label: {

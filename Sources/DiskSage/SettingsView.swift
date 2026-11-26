@@ -1,14 +1,19 @@
+import AppKit
 import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
     static let windowSize = CGSize(width: 800, height: 600)
+    static let minimumWindowSize = CGSize(width: 720, height: 520)
     @Bindable var model: AppModel
     @AppStorage("automaticCleanupEnabled") private var automaticCleanupEnabled = true
     @AppStorage("cleanupThresholdGiB") private var cleanupThresholdGiB = 15
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
-    @AppStorage("settingsSelectedTab") private var selectedTab = "agent"
+    @State private var cliSymlinkStatus = CLISymlinkInstaller.status()
+    @State private var cliSymlinkError: String?
+    @State private var cliOnPATH = CLISymlinkInstaller.isLocalBinOnPATH()
+    @AppStorage("settingsSelectedTab") private var selectedTab = "general"
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -46,6 +51,15 @@ struct SettingsView: View {
                         .onChange(of: cleanupThresholdGiB) { _, _ in model.store.send(.monitoringPreferencesChanged) }
                     LabeledContent("Last automatic cleanup", value: model.automaticCleanupSummary)
                 }
+                Section {
+                    cliSymlinkRow
+                } header: {
+                    Text("Command Line")
+                } footer: {
+                    Text(cliOnPATH
+                         ? "Creates a symlink so `disksage scan` and `disksage explain <path>` work from Terminal."
+                         : "Creates a symlink for `disksage scan` and `disksage explain <path>`. Add ~/.local/bin to your shell PATH if needed.")
+                }
                 KeepRulesSettingsView()
                 ProjectCacheRulesSettingsView()
             }
@@ -58,11 +72,89 @@ struct SettingsView: View {
                 .tag("about")
         }
         .padding(.top, 12)
-        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
-        .onAppear { if selectedTab == "tools" { selectedTab = "mcp" } }
+        .frame(minWidth: Self.minimumWindowSize.width, minHeight: Self.minimumWindowSize.height)
+        .onAppear {
+            if selectedTab == "tools" { selectedTab = "mcp" }
+            refreshCLISymlinkStatus()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .diskSageSettingsChanged)) { _ in
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshCLISymlinkStatus()
+        }
+    }
+
+    @ViewBuilder
+    private var cliSymlinkRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CLI symlink (`~/.local/bin/disksage`)")
+                    Text(cliStatusDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if case .installed = cliSymlinkStatus {
+                    Button("Remove Symlink", action: removeCLISymlink)
+                } else if case .pointsElsewhere(_, true) = cliSymlinkStatus {
+                    Button("Remove Symlink", action: removeCLISymlink)
+                    Button("Update CLI Symlink", action: installCLISymlink)
+                } else if case .pointsElsewhere(_, false) = cliSymlinkStatus {
+                    Button("Install CLI Symlink", action: installCLISymlink)
+                        .disabled(true)
+                } else {
+                    Button("Install CLI Symlink", action: installCLISymlink)
+                        .disabled(cliSymlinkStatus == .blockedByExistingFile)
+                }
+            }
+            if let cliSymlinkError {
+                Text(cliSymlinkError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var cliStatusDescription: String {
+        switch cliSymlinkStatus {
+        case let .installed(target):
+            "Installed -> \(target)"
+        case .notInstalled:
+            "Not installed"
+        case let .pointsElsewhere(target, true):
+            "Points to another DiskSage build -> \(target)"
+        case let .pointsElsewhere(target, false):
+            "Another command symlink exists -> \(target)"
+        case .blockedByExistingFile:
+            "A non-symlink file already exists at ~/.local/bin/disksage"
+        }
+    }
+
+    private func refreshCLISymlinkStatus() {
+        cliSymlinkStatus = CLISymlinkInstaller.status()
+        cliOnPATH = CLISymlinkInstaller.isLocalBinOnPATH()
+    }
+
+    private func installCLISymlink() {
+        do {
+            _ = try CLISymlinkInstaller.install()
+            cliSymlinkError = nil
+        } catch {
+            cliSymlinkError = error.localizedDescription
+        }
+        refreshCLISymlinkStatus()
+    }
+
+    private func removeCLISymlink() {
+        do {
+            try CLISymlinkInstaller.uninstall()
+            cliSymlinkError = nil
+        } catch {
+            cliSymlinkError = error.localizedDescription
+        }
+        refreshCLISymlinkStatus()
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {

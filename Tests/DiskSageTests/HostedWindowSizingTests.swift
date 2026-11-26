@@ -70,6 +70,74 @@ struct HostedWindowSizingTests {
         #expect(bounds.contains(window.frame))
     }
 
+    @Test func resizableSettingsWindowKeepsTabsVisibleAndHonorsMinimumSize() async throws {
+        _ = NSApplication.shared
+        let frameName = "SettingsSizingTest-\(UUID())"
+        let domain = "SettingsSizingDefaults-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            NSWindow.removeFrame(usingName: frameName)
+            defaults.removePersistentDomain(forName: domain)
+        }
+        let window = makeWindow()
+        defer { window.close() }
+        let model = AppModel(store: ManagementTestSupport.store())
+        HostedWindowSizing.configure(
+            window,
+            content: SettingsView(model: model).defaultAppStorage(defaults),
+            minimum: SettingsView.minimumWindowSize,
+            preferred: SettingsView.windowSize,
+            frameName: frameName
+        )
+        #expect(window.contentMinSize == SettingsView.minimumWindowSize)
+        for _ in 0..<5 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let size = window.contentRect(forFrameRect: window.frame).size
+        #expect(size.width >= SettingsView.minimumWindowSize.width && size.height >= SettingsView.minimumWindowSize.height)
+        if let toolbar = window.toolbar, !toolbar.items.isEmpty {
+            #expect(toolbar.visibleItems?.map(\.itemIdentifier) == toolbar.items.map(\.itemIdentifier))
+        }
+        let minimumFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: SettingsView.minimumWindowSize)).size
+        let clamped = DiskSageAppDelegate.clampedSettingsFrameSize(for: window, proposed: NSSize(width: 300, height: 200))
+        #expect(clamped.width >= minimumFrame.width && clamped.height >= minimumFrame.height)
+    }
+
+    @Test func rebuildDisplayMenuItemsReplacesOnlyDisplayEntriesPreservingStandardAndTrailingItems() {
+        final class DummyTarget: NSObject {
+            @objc func picked(_ sender: NSMenuItem) {}
+        }
+        let target = DummyTarget()
+        let menu = NSMenu(title: "Window")
+        menu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "DiskSage Review", action: nil, keyEquivalent: "")
+
+        DiskSageAppDelegate.rebuildDisplayMenuItems(
+            in: menu,
+            screens: [("Built-in Retina", 1)],
+            target: target,
+            action: #selector(DummyTarget.picked(_:))
+        )
+        #expect(menu.items.map(\.title) == ["Minimize", "Zoom", "", "Dashboard on Built-in Retina", "", "Bring All to Front", "DiskSage Review"])
+
+        DiskSageAppDelegate.rebuildDisplayMenuItems(
+            in: menu,
+            screens: [("Built-in Retina", 1), ("Studio Display", 2)],
+            target: target,
+            action: #selector(DummyTarget.picked(_:))
+        )
+        #expect(menu.items.map(\.title) == [
+            "Minimize", "Zoom", "", "Dashboard on Built-in Retina", "Dashboard on Studio Display", "", "Bring All to Front", "DiskSage Review"
+        ])
+        #expect(menu.items[3].representedObject as? NSNumber == 1)
+        #expect(menu.items[4].representedObject as? NSNumber == 2)
+    }
+
     private func makeWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 82, height: 134),
             styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)

@@ -31,6 +31,75 @@ struct KeepRules: Sendable, Equatable {
         lines(text, separators: "\n").filter { !($0.hasPrefix("/") || $0.hasPrefix("~/")) || $0 == "/" }
     }
 
+    static func displayPath(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let canonicalTarget = CleanupPath.fileURL(url)
+        let homePath = canonicalHome.path
+        if canonicalTarget.path.hasPrefix(homePath + "/") {
+            return "~/" + canonicalTarget.path.dropFirst(homePath.count + 1)
+        }
+        return canonicalTarget.path
+    }
+
+    struct AppendResult: Equatable, Sendable {
+        let text: String
+        let added: [URL]
+        let unsupported: [URL]
+    }
+
+    static func canRepresent(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let canonicalHome = CleanupPath.fileURL(home)
+        let canonical = CleanupPath.fileURL(url).path
+        guard !canonical.isEmpty, canonical != "/" else { return false }
+        let formatted = displayPath(url, home: canonicalHome)
+        guard !formatted.contains(where: \.isNewline),
+              formatted.trimmingCharacters(in: .whitespaces) == formatted else {
+            return false
+        }
+        return parse(paths: formatted, simulatorNames: "", home: canonicalHome).paths == [canonical]
+    }
+
+    static func append(urls: [URL], to existingText: String,
+                       home: URL = FileManager.default.homeDirectoryForCurrentUser) -> AppendResult {
+        let canonicalHome = CleanupPath.fileURL(home)
+        var existingLines = lines(existingText, separators: "\n")
+        var seenKeys = Set(existingLines.compactMap { line -> String? in
+            let expanded = line.hasPrefix("~/") ? canonicalHome.path + line.dropFirst(1) : line
+            guard expanded.hasPrefix("/"), expanded != "/" else { return nil }
+            return Self.key(CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path)
+        })
+        var added: [URL] = []
+        var unsupported: [URL] = []
+        for url in urls {
+            guard canRepresent(url, home: canonicalHome) else {
+                unsupported.append(url)
+                continue
+            }
+            let canonical = CleanupPath.fileURL(url).path
+            let k = Self.key(canonical)
+            guard seenKeys.insert(k).inserted else { continue }
+            existingLines.append(displayPath(url, home: canonicalHome))
+            added.append(url)
+        }
+        return AppendResult(text: existingLines.joined(separator: "\n"), added: added, unsupported: unsupported)
+    }
+
+    static func appending(urls: [URL], to existingText: String,
+                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        append(urls: urls, to: existingText, home: home).text
+    }
+
+    @discardableResult
+    static func keep(_ urls: [URL], defaults: UserDefaults = .standard,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) -> AppendResult {
+        let existing = defaults.string(forKey: pathsKey) ?? ""
+        let result = append(urls: urls, to: existing, home: home)
+        guard !result.added.isEmpty, result.text != existing else { return result }
+        defaults.set(result.text, forKey: pathsKey)
+        NotificationCenter.default.post(name: .diskSageSettingsChanged, object: nil)
+        return result
+    }
+
     /// True when the item is a kept path, is inside one, or contains one.
     /// Paths compare without case, because the default APFS volume ignores case.
     func keeps(_ url: URL) -> Bool {

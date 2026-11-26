@@ -49,7 +49,11 @@ struct ProjectCacheRulesSettingsView: View {
                     value: $quietHours, in: ProjectCacheRulesLoader.editableQuietHoursRange)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Extra project folders, one per line")
+                HStack {
+                    Text("Extra project folders, one per line")
+                    Spacer()
+                    Button("Add Folder…", systemImage: "folder.badge.plus", action: addProjectFolders)
+                }
                 TextEditor(text: $extraRootsText)
                     .font(.body.monospaced())
                     .frame(minHeight: 52)
@@ -106,6 +110,11 @@ struct ProjectCacheRulesSettingsView: View {
         .onAppear {
             if !isLoaded || !isDirty {
                 isLoaded = true
+                reload()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .diskSageProjectCacheRulesChanged)) { _ in
+            if isLoaded, !isDirty {
                 reload()
             }
         }
@@ -166,6 +175,7 @@ struct ProjectCacheRulesSettingsView: View {
             loadedSkipText = extraSkipText
             statusMessage = "Saved."
             isErrorStatus = false
+            NotificationCenter.default.post(name: .diskSageProjectCacheRulesChanged, object: nil)
         } catch {
             statusMessage = error.localizedDescription
             isErrorStatus = true
@@ -192,10 +202,56 @@ struct ProjectCacheRulesSettingsView: View {
             loadedSkipText = ""
             statusMessage = "Reset to defaults."
             isErrorStatus = false
+            NotificationCenter.default.post(name: .diskSageProjectCacheRulesChanged, object: nil)
         } catch {
             statusMessage = error.localizedDescription
             isErrorStatus = true
         }
+    }
+
+    private func addProjectFolders() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add Project Folder"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+
+        var merged = extraRootsList
+        var seenKeys = Set(merged.map { normalizedRootKey($0) })
+        var rejected: [String] = []
+        var addedCount = 0
+
+        for url in panel.urls {
+            let formatted = KeepRules.displayPath(url)
+            guard KeepRules.canRepresent(url),
+                  ProjectCacheRulesLoader.invalidExtraRoots([formatted]).isEmpty else {
+                rejected.append(url.lastPathComponent)
+                continue
+            }
+            let key = normalizedRootKey(formatted)
+            guard seenKeys.insert(key).inserted else { continue }
+            merged.append(formatted)
+            addedCount += 1
+        }
+
+        if addedCount > 0 {
+            extraRootsText = merged.joined(separator: "\n")
+        }
+        if !rejected.isEmpty {
+            statusMessage = "Skipped invalid folder(s) (must be non-symlinked under ~, outside ~/Library): \(rejected.joined(separator: ", "))."
+            isErrorStatus = true
+        } else if addedCount > 0 {
+            statusMessage = nil
+            isErrorStatus = false
+        }
+    }
+
+    private func normalizedRootKey(_ entry: String) -> String {
+        let home = CleanupPath.fileURL(FileManager.default.homeDirectoryForCurrentUser).path
+        let expanded = entry.hasPrefix("~/") ? home + entry.dropFirst(1) : entry
+        return CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path
+            .precomposedStringWithCanonicalMapping.lowercased()
     }
 
     private func revealConfig() {

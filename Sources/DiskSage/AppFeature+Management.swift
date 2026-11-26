@@ -42,6 +42,26 @@ extension AppFeature {
                 try ToolSettings.validate(patch)
                 effect = try requestManagementApproval(state: &state, request: request, title: "Change DiskSage settings?",
                     details: ToolSettings.details(patch), settings: management.settings().filter { patch[$0.key] != nil })
+            case "update_project_cache_rules":
+                let patch = args["rules"]?.object ?? [:]
+                let snapshot = try management.loadProjectCacheRulesSnapshot()
+                let updated = try ToolProjectCacheRules.applyPatch(
+                    patch,
+                    to: snapshot.config,
+                    home: management.projectCacheRulesHome()
+                )
+                let details = ToolProjectCacheRules.details(
+                    patch,
+                    updated: updated,
+                    configPath: management.projectCacheRulesPath()
+                )
+                effect = try requestManagementApproval(
+                    state: &state,
+                    request: request,
+                    title: "Change DiskSage project cache rules?",
+                    details: details,
+                    projectCacheRulesUpdate: .init(updated: updated, expectedRawData: snapshot.rawData)
+                )
             case "request_advice": effect = try requestManagedAdvice(state: &state, request: request, approved: false)
             case "delete_candidates": effect = try requestManagedDeletion(state: &state, request: request)
             case "get_history", "get_logs", "list_models", "explain_path":
@@ -96,6 +116,17 @@ extension AppFeature {
                         } catch { await send(.managementFinished(id, .failure(FeatureFailure(message: error.localizedDescription)))) }
                     }
                 }
+                if let rulesUpdate = pending.projectCacheRulesUpdate {
+                    state.agentToolJobs[id]?.phase = .loading
+                    return .run { [management] send in
+                        do {
+                            _ = try await management.saveProjectCacheRules(rulesUpdate.updated, rulesUpdate.expectedRawData)
+                            await send(.managementFinished(id, .success(management.readProjectCacheRules())))
+                        } catch {
+                            await send(.managementFinished(id, .failure(FeatureFailure(message: error.localizedDescription))))
+                        }
+                    }
+                }
                 if let configuration = pending.configuration {
                     guard ToolSettings.configuration(configuration.provider, values: management.settings()).0 == configuration else {
                         throw FeatureFailure(message: "Advisor configuration changed during approval. Request advice again.")
@@ -144,10 +175,12 @@ extension AppFeature {
     }
     func requestManagementApproval(state: inout State, request: AgentToolRequest, title: String, details: String,
         schedule: CleanupSchedule? = nil, previous: CleanupSchedule? = nil,
-        settings: [String: ToolValue]? = nil, configuration: AgentConfiguration? = nil) throws -> EffectOf<Self> {
+        settings: [String: ToolValue]? = nil, configuration: AgentConfiguration? = nil,
+        projectCacheRulesUpdate: ManagementApproval.ProjectCacheRulesUpdate? = nil) throws -> EffectOf<Self> {
         guard !state.isBusy, let id = request.requestID else { throw FeatureFailure(message: "DiskSage is busy. Wait for the current operation or confirmation.") }
         state.pendingManagementApproval = ManagementApproval(id: id, request: request, title: title, details: details,
-            schedule: schedule, previousSchedule: previous, previousSettings: settings, configuration: configuration)
+            schedule: schedule, previousSchedule: previous, previousSettings: settings, configuration: configuration,
+            projectCacheRulesUpdate: projectCacheRulesUpdate)
         state.agentToolJobs[id]?.phase = .awaitingConfirmation
         state.agentToolJobs[id]?.result = .object(["confirmation_id": .string(id.uuidString), "message": .string("A person must approve this request in DiskSage.")])
         return .none

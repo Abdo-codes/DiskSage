@@ -195,8 +195,9 @@ Read `tools/list` for complete strict schemas. Common examples:
 
 | Tool | Arguments besides `request_id` when required |
 | --- | --- |
-| `get_dashboard`, `get_settings`, `get_mcp_setup`, `list_advisors` | None; no request UUID needed |
-| `list_candidates` | Optional `query`, `risk` (`all`, `low`, `medium`, `high`), `offset`, `limit`; no request UUID |
+| `get_dashboard`, `get_settings`, `get_project_cache_rules`, `get_mcp_setup`, `list_advisors` | None; no request UUID needed |
+| `list_candidates` | Optional `query`, `risk` (`all`, `low`, `medium`, `high`), `category` (`all`, `build`, `cache`, `simulator`, `archive`), `sort` (`largest`, `name`, `risk`), `offset`, `limit`; no request UUID |
+| `update_project_cache_rules` | `rules` object (`quiet_hours`, `extra_roots`, `names`, `skip`, or `reset`) |
 | `list_schedules` | Optional `offset`, `limit`; no request UUID |
 | `set_selection` | `candidate_ids`, `mode` (`replace`, `add`, `remove`) |
 | `delete_candidates` | Nonempty `candidate_ids` from the current scan |
@@ -234,10 +235,23 @@ quota; Ollama model listing may fail independently of the app.
 - `codex_model`, `claude_model`, `ollama_model` (strings)
 - `codex_metadata_consent`, `claude_metadata_consent`, `ollama_metadata_consent`
   (booleans)
+- `keep_paths` (string; absolute or `~/` paths, one per line)
+- `keep_simulator_names` (string; simulator name patterns, newline- or
+  comma-separated)
 
 Unknown keys are rejected. Settings are applied only after a person approves
 those exact changes in the app. This API never returns credentials or performs
 provider sign-in; account authentication remains in the provider's own UI/CLI.
+
+`get_project_cache_rules` reads custom `~/.config/disksage/rules.json` settings
+and effective merged rules (`quiet_hours`, `names`, `skip`, `extra_roots`).
+`update_project_cache_rules` accepts a `rules` patch with `quiet_hours` (1–168),
+`extra_roots` (existing or valid non-symlinked directories under `~`, outside
+`~/Library`), `names` (non-VCS folder names), `skip` (folder names), or
+`reset: true` alone to restore defaults for those fields. Changes take effect
+only after explicit in-app approval and reject stale conflicts if `rules.json`
+changed on disk while pending. Built-in Git-ignore, tracked-file, nested-Git,
+Keep, and process guards cannot be disabled.
 
 ## Git worktrees
 

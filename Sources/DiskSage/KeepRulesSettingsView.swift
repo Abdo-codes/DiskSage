@@ -1,14 +1,20 @@
+import AppKit
 import SwiftUI
 
 /// Settings for `KeepRules`. DiskSage never offers or deletes what these rules keep.
 struct KeepRulesSettingsView: View {
     @AppStorage(KeepRules.pathsKey) private var paths = ""
     @AppStorage(KeepRules.simulatorNamesKey) private var simulatorNames = ""
+    @State private var pickerError: String?
 
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Kept paths, one per line")
+                HStack {
+                    Text("Kept paths, one per line")
+                    Spacer()
+                    Button("Add Folder…", systemImage: "folder.badge.plus", action: addFolders)
+                }
                 TextEditor(text: $paths)
                     .font(.body.monospaced())
                     .frame(minHeight: 64)
@@ -18,12 +24,34 @@ struct KeepRulesSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+                if let pickerError {
+                    Text(pickerError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             TextField("Kept simulator names", text: $simulatorNames, prompt: Text("lane-*, coord-*"))
         } header: {
             Text("Keep")
         } footer: {
             Text("DiskSage never offers or deletes a kept path, anything inside it, or a folder that contains it. Simulators whose names match a pattern stay.")
+        }
+    }
+
+    private func addFolders() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Keep"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let result = KeepRules.append(urls: panel.urls, to: paths)
+        paths = result.text
+        if !result.unsupported.isEmpty {
+            let names = result.unsupported.map(\.lastPathComponent).joined(separator: ", ")
+            pickerError = "Skipped unsupported path(s) (paths containing line breaks or leading/trailing spaces cannot be stored in Keep rules): \(names)."
+        } else {
+            pickerError = nil
         }
     }
 }

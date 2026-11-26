@@ -24,18 +24,23 @@ struct DiskScanner: Sendable {
         let warning: String?
     }
 
+    static let defaultMaximumCandidates = 100
+
     private let locations: [Location]?
     private let activity: @Sendable () throws -> CleanupActivity
     private let inventoryLimit: Int
     private let maxConcurrency: Int
+    private let maximumCandidates: Int
     private let home: URL
     init(locations: [Location]? = nil, activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() },
          inventoryLimit: Int = GeneratedFileInventory.defaultMaximumEntries, maxConcurrency: Int = 4,
+         maximumCandidates: Int = DiskScanner.defaultMaximumCandidates,
          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.locations = locations
         self.activity = activity
         self.inventoryLimit = inventoryLimit
         self.maxConcurrency = min(4, max(1, maxConcurrency))
+        self.maximumCandidates = max(1, maximumCandidates)
         self.home = CleanupPath.fileURL(home)
     }
 
@@ -43,9 +48,10 @@ struct DiskScanner: Sendable {
 
     /// Throws when the activity check fails. An empty result means that the scan ran and found nothing.
     func report() async throws -> ScanReport {
-        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit, maxConcurrency, home] in
+        let task = Task.detached(priority: .utility) { [locations, activity, inventoryLimit, maxConcurrency, maximumCandidates, home] in
             try await Self.scanConcurrently(locations: locations, activity: activity,
-                                            inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency, home: home)
+                                            inventoryLimit: inventoryLimit, maxConcurrency: maxConcurrency,
+                                            maximumCandidates: maximumCandidates, home: home)
         }
         return try await withTaskCancellationHandler {
             if Task.isCancelled { task.cancel() }
@@ -61,7 +67,7 @@ struct DiskScanner: Sendable {
     }
 
     private static func scanConcurrently(locations: [Location]?, activity: @Sendable () throws -> CleanupActivity,
-                                         inventoryLimit: Int, maxConcurrency: Int, home: URL) async throws -> ScanReport {
+                                         inventoryLimit: Int, maxConcurrency: Int, maximumCandidates: Int, home: URL) async throws -> ScanReport {
         guard !Task.isCancelled else { return ScanReport(candidates: []) }
         // A failed/incomplete activity check never turns into permission to delete. It is an error, not an empty disk.
         let currentActivity: CleanupActivity
@@ -97,7 +103,7 @@ struct DiskScanner: Sendable {
                 if lhs.url.path != rhs.url.path { return lhs.url.path < rhs.url.path }
                 return lhs.name < rhs.name
             }
-            .prefix(100)
+            .prefix(maximumCandidates)
             .map { $0 }
         return ScanReport(candidates: offered, warnings: Task.isCancelled ? [] : warnings)
     }

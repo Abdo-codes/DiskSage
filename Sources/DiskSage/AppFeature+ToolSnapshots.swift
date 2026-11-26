@@ -58,11 +58,13 @@ extension AppFeature {
             return .object(result)
         case "list_candidates":
             let query = args["query"]?.string ?? "", risk = args["risk"]?.string ?? "all"
-            let values = state.candidates.filter {
-                let matches = query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.url.path.localizedCaseInsensitiveContains(query)
-                let level = $0.risk == .low ? "low" : ($0.risk == .high ? "high" : "medium")
-                return matches && (risk == "all" || risk == level)
-            }
+            let category = ReviewCategoryFilter(rawValue: args["category"]?.string ?? "all") ?? .all
+            let sort = ReviewSortOrder(rawValue: args["sort"]?.string ?? "largest") ?? .largest
+            let values = ReviewFilter.candidates(state.candidates, query: query, risk: .all, category: category, sort: sort)
+                .filter {
+                    let level = $0.risk == .low ? "low" : ($0.risk == .high ? "high" : "medium")
+                    return risk == "all" || risk == level
+                }
             var page = try ToolPage.make(values.map { candidateSummary($0, state: state) }, key: "candidates",
                 offset: args["offset"]?.integer ?? 0, limit: args["limit"]?.integer ?? 20).object!
             page["last_scan"] = try .encode(state.lastScanDate)
@@ -75,6 +77,7 @@ extension AppFeature {
             page["time_zone"] = .string(calendar.timeZone.identifier); page["error"] = try .encode(state.scheduleError)
             return .object(page)
         case "get_settings": return .object(management.settings())
+        case "get_project_cache_rules": return management.readProjectCacheRules()
         case "get_mcp_setup":
             let setup = MCPConnectionInstructions.current
             return .object(["claude": .string(setup.claudeCommand), "codex": .string(setup.codexCommand), "stdio": .string(setup.launchCommand),

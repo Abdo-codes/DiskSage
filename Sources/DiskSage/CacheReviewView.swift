@@ -3,10 +3,10 @@ import SwiftUI
 
 struct CacheReviewView: View {
     @Bindable var model: AppModel
-    @State private var query = ""
-    @State private var riskFilter: ReviewRiskFilter = .all
-    @State private var categoryFilter: ReviewCategoryFilter = .all
-    @State private var sortOrder: ReviewSortOrder = .largest
+    @Binding var query: String
+    @Binding var riskFilter: ReviewRiskFilter
+    @Binding var categoryFilter: ReviewCategoryFilter
+    @Binding var sortOrder: ReviewSortOrder
     @State private var visibleCandidates: [CleanupCandidate] = []
 
     var body: some View {
@@ -28,6 +28,11 @@ struct CacheReviewView: View {
                 Divider()
             }
             candidateTable
+            if !model.selectedCandidates.isEmpty {
+                Divider()
+                ReviewSelectionInspector(selectedCandidates: model.selectedCandidates,
+                                         recommendations: model.recommendations)
+            }
             Divider()
             ReviewFooter(model: model, hiddenCount: model.selection.subtracting(visibleIDs).count) {
                 model.requestDeletion(model.selectedCandidates)
@@ -103,6 +108,12 @@ struct CacheReviewView: View {
                     pasteboard.clearContents()
                     pasteboard.setString(items.map(\.url.path).joined(separator: "\n"), forType: .string)
                 }
+                Divider()
+                Button(items.count == 1 ? "Keep (Exclude from Scans)" : "Keep \(items.count) Items (Exclude from Scans)",
+                       systemImage: "pin.slash") {
+                    model.keepCandidates(items)
+                }
+                .disabled(model.isBusy)
             }
         }
         .overlay {

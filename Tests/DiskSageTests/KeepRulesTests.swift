@@ -1,3 +1,4 @@
+import ComposableArchitecture
 import Darwin
 import Foundation
 import Testing
@@ -116,5 +117,95 @@ struct KeepRulesTests {
         #expect(throws: (any Error).self) {
             try ScheduledFolderPolicy.validate(try schedule("\(previews)/\(kept)/data"), keep: rules, home: f.base, simctl: run)
         }
+    }
+
+    @MainActor
+    @Test func appendingAndKeepingCandidatesDeduplicatesFormatsTildeAndRemovesMatches() async throws {
+        let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+        let folder = home.appending(path: "Developer/app/.build")
+        let outside = URL(fileURLWithPath: "/private/tmp/external-cache")
+
+        #expect(KeepRules.displayPath(folder, home: home) == "~/Developer/app/.build")
+        #expect(KeepRules.displayPath(outside, home: home) == "/private/tmp/external-cache")
+
+        let merged = KeepRules.appending(
+            urls: [home.appending(path: "Developer/APP/.build"), folder, outside, URL(fileURLWithPath: "/")],
+            to: " ~/Developer/app/.build \n",
+            home: home
+        )
+        #expect(merged == "~/Developer/app/.build\n/private/tmp/external-cache")
+
+        let domain = "DiskSage.KeepRulesWriteTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        #expect(KeepRules.keep([folder], defaults: defaults, home: home).added == [folder])
+        #expect(KeepRules.keep([folder], defaults: defaults, home: home).added.isEmpty)
+        #expect(defaults.string(forKey: KeepRules.pathsKey) == "~/Developer/app/.build")
+
+        // Paths that cannot round-trip cleanly through line-based KeepRules are rejected cleanly.
+        let trailingSpace = home.appending(path: "Downloads/important ")
+        let embeddedNewline = home.appending(path: "Downloads/important\nfile")
+        #expect(!KeepRules.canRepresent(trailingSpace, home: home))
+        #expect(!KeepRules.canRepresent(embeddedNewline, home: home))
+        let rejected = KeepRules.keep([trailingSpace, embeddedNewline], defaults: defaults, home: home)
+        #expect(rejected.added.isEmpty)
+        #expect(rejected.unsupported == [trailingSpace, embeddedNewline])
+        #expect(defaults.string(forKey: KeepRules.pathsKey) == "~/Developer/app/.build")
+
+        let parent = CleanupCandidate(
+            url: home.appending(path: "Developer/app"),
+            name: "app", category: .build, size: 100, risk: .low, reason: "Parent"
+        )
+        let target = CleanupCandidate(
+            url: folder,
+            name: "app/.build", category: .build, size: 50, risk: .low, reason: "Target"
+        )
+        let unrelated = CleanupCandidate(
+            url: home.appending(path: "Developer/other/.build"),
+            name: "other/.build", category: .build, size: 25, risk: .low, reason: "Other"
+        )
+        let badCandidate = CleanupCandidate(
+            url: URL(fileURLWithPath: "/private/tmp/bad "),
+            name: "bad ", category: .cache, size: 10, risk: .low, reason: "Bad path"
+        )
+        var initial = AppFeature.State()
+        initial.candidates = [parent, target, unrelated, badCandidate]
+        initial.selection = [target.id, unrelated.id, badCandidate.id]
+        initial.recommendations = [target.id: .init(id: target.id, decision: .review, rationale: "r")]
+        initial.cleanupFailures = [CleanupItemResult(candidate: target, removedBytes: 0, errorDescription: "err")]
+
+        let recordedURLs = LockIsolated<[URL]>([])
+        let store = ManagementTestSupport.store(initial) {
+            $0.management.keepPaths = { urls in recordedURLs.setValue(urls) }
+        }
+        await store.send(.keepCandidates([target])).finish()
+        #expect(recordedURLs.value == [folder])
+        #expect(store.candidates.map(\.id) == [unrelated.id, badCandidate.id])
+        #expect(store.selection == [unrelated.id, badCandidate.id])
+        #expect(store.recommendations[target.id] == nil)
+        #expect(store.cleanupFailures.isEmpty)
+        #expect(store.statusMessage.contains("Kept app/.build"))
+
+        // Unrepresentable candidate stays in review and is reported via errorMessage without writing.
+        recordedURLs.setValue([])
+        await store.send(.keepCandidates([badCandidate])).finish()
+        #expect(recordedURLs.value.isEmpty)
+        #expect(store.candidates.map(\.id) == [unrelated.id, badCandidate.id])
+        #expect(store.selection == [unrelated.id, badCandidate.id])
+        #expect(store.errorMessage?.contains("bad ") == true)
+
+        // Active scans ignore Keep so an in-flight scan cannot restore newly kept items.
+        var scanningState = AppFeature.State()
+        scanningState.operation = .scanning
+        scanningState.candidates = [unrelated]
+        scanningState.selection = [unrelated.id]
+        let scanningCalls = LockIsolated<[URL]>([])
+        let scanningStore = ManagementTestSupport.store(scanningState) {
+            $0.management.keepPaths = { urls in scanningCalls.setValue(urls) }
+        }
+        await scanningStore.send(.keepCandidates([unrelated])).finish()
+        #expect(scanningCalls.value.isEmpty)
+        #expect(scanningStore.candidates.map(\.id) == [unrelated.id])
+        #expect(scanningStore.selection == [unrelated.id])
     }
 }
