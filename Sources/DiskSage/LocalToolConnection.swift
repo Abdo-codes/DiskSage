@@ -60,8 +60,8 @@ enum LocalToolConnection {
         throw ConnectionError.invalidFrame
     }
 
-    static func writeFrame(_ data: Data, to fd: Int32) throws {
-        guard data.count < maximumFrameSize else { throw ConnectionError.invalidFrame }
+    static func writeFrame(_ data: Data, to fd: Int32, maximumSize: Int = maximumFrameSize) throws {
+        guard data.count < maximumSize else { throw ConnectionError.invalidFrame }
         var framed = data
         framed.append(0x0A)
         try framed.withUnsafeBytes { buffer in

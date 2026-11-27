@@ -13,6 +13,7 @@ final class DashboardPanelController {
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var currentScreen: NSScreen?
+    private weak var statusButton: NSStatusBarButton?
     private var anchorX: CGFloat = 0
     private var heightLimited = false
     private var layingOut = false
@@ -46,13 +47,28 @@ final class DashboardPanelController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.cancel = { [weak self] in self?.hide() }
-        for name in [NSApplication.didResignActiveNotification, NSApplication.didChangeScreenParametersNotification] {
-            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.hide() }
-            }
-            observerTokens.append(NotificationToken(center: .default, token: token))
+        panel.cancel = { [weak self] in
+            guard let self, self.panel.attachedSheet == nil else { return }
+            self.hide()
         }
+        let resignToken = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.attachedSheet == nil else { return }
+                self.hide()
+            }
+        }
+        observerTokens.append(NotificationToken(center: .default, token: resignToken))
+        let screenToken = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.attachedSheet == nil else { return }
+                self.hide()
+            }
+        }
+        observerTokens.append(NotificationToken(center: .default, token: screenToken))
         let accessibilityToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.hide() } }
@@ -60,6 +76,7 @@ final class DashboardPanelController {
     }
 
     func show(button: NSStatusBarButton, invocation: PopupPlacement.Invocation, on requestedScreen: NSScreen? = nil) {
+        statusButton = button
         let mouse = NSEvent.mouseLocation
         let screens = NSScreen.screens
         let iconRect = button.accessibilityFrame()
@@ -108,12 +125,32 @@ final class DashboardPanelController {
     }
 
     private func makeView(heightLimit: CGFloat?) -> MenuBarView {
-        MenuBarView(model: model, heightLimit: heightLimit, openReview: openReview,
-                    openSettings: openSettings, openHistory: openHistory)
+        MenuBarView(model: model, heightLimit: heightLimit,
+                    onNaturalHeightChange: { [weak self] height in
+                        DispatchQueue.main.async { [weak self] in self?.handleNaturalHeight(height) }
+                    },
+                    openReview: openReview, openSettings: openSettings, openHistory: openHistory)
     }
 
     private func installSurface(_ view: NSView, size: NSSize) {
         panel.contentView = DashboardSurfaceView(content: view, size: size)
+    }
+
+    private func handleNaturalHeight(_ height: CGFloat) {
+        guard panel.isVisible, !layingOut, heightLimited, let hosting, let currentScreen else { return }
+        let maxHeight = PopupPlacement.frame(size: CGSize(width: 368, height: CGFloat.greatestFiniteMagnitude),
+                                             anchorX: anchorX, visibleFrame: currentScreen.visibleFrame).height
+        guard height > 0, height + 4 <= maxHeight else { return }
+        layingOut = true
+        defer { layingOut = false }
+        heightLimited = false
+        hosting.rootView = makeView(heightLimit: nil)
+        let frame = PopupPlacement.frame(size: CGSize(width: 368, height: height),
+                                         anchorX: anchorX, visibleFrame: currentScreen.visibleFrame)
+        if panel.frame != frame {
+            panel.setFrame(frame, display: true)
+            panel.invalidateShadow()
+        }
     }
 
     private func resizeIfNeeded() {
@@ -136,14 +173,21 @@ final class DashboardPanelController {
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.hide()
+            guard let self, self.panel.attachedSheet == nil else { return }
+            self.hide()
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, self.panel.isVisible else { return event }
             let point = NSEvent.mouseLocation
-            let inOwnButton = self.currentScreen.map {
-                $0.frame.contains(point) && point.y >= $0.visibleFrame.maxY && abs(point.x - self.anchorX) < 16
-            } ?? false
+            let buttonRect = self.statusButton?.accessibilityFrame() ?? .zero
+            let inOwnButton: Bool
+            if !buttonRect.isEmpty {
+                inOwnButton = buttonRect.contains(point)
+            } else {
+                inOwnButton = self.currentScreen.map {
+                    $0.frame.contains(point) && point.y >= $0.visibleFrame.maxY && abs(point.x - self.anchorX) < 16
+                } ?? false
+            }
             if event.window !== self.panel && !self.panel.frame.contains(point) && !inOwnButton && self.panel.attachedSheet == nil {
                 self.hide()
             }

@@ -20,15 +20,24 @@ struct KeepRules: Sendable, Equatable {
         let home = CleanupPath.fileURL(home).path
         let kept = lines(paths, separators: "\n").compactMap { line -> String? in
             let expanded = line.hasPrefix("~/") ? home + line.dropFirst(1) : line
-            guard expanded.hasPrefix("/"), expanded != "/" else { return nil }
-            return CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path
+            guard expanded.hasPrefix("/") else { return nil }
+            let canonical = CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path
+            guard canonical != "/", canonical != home else { return nil }
+            return canonical
         }
         return Self(paths: kept, simulatorNames: lines(simulatorNames, separators: "\n,"))
     }
 
     /// Invalid lines, so Settings can reject them instead of ignoring them.
-    static func invalidPaths(_ text: String) -> [String] {
-        lines(text, separators: "\n").filter { !($0.hasPrefix("/") || $0.hasPrefix("~/")) || $0 == "/" }
+    static func invalidPaths(_ text: String,
+                             home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String] {
+        let homePath = CleanupPath.fileURL(home).path
+        return lines(text, separators: "\n").filter { line in
+            guard line.hasPrefix("/") || line.hasPrefix("~/") else { return true }
+            let expanded = line.hasPrefix("~/") ? homePath + line.dropFirst(1) : line
+            let canonical = CleanupPath.fileURL(URL(fileURLWithPath: expanded)).path
+            return canonical == "/" || canonical == homePath
+        }
     }
 
     static func displayPath(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
@@ -50,7 +59,7 @@ struct KeepRules: Sendable, Equatable {
     static func canRepresent(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
         let canonicalHome = CleanupPath.fileURL(home)
         let canonical = CleanupPath.fileURL(url).path
-        guard !canonical.isEmpty, canonical != "/" else { return false }
+        guard !canonical.isEmpty, canonical != "/", canonical != canonicalHome.path else { return false }
         let formatted = displayPath(url, home: canonicalHome)
         guard !formatted.contains(where: \.isNewline),
               formatted.trimmingCharacters(in: .whitespaces) == formatted else {
@@ -117,7 +126,8 @@ struct KeepRules: Sendable, Equatable {
     private static func key(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
 
     private static func lines(_ text: String, separators: String) -> [String] {
-        text.split(whereSeparator: { separators.contains($0) })
+        let splitNewlines = separators.contains("\n")
+        return text.split(whereSeparator: { separators.contains($0) || (splitNewlines && $0.isNewline) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }

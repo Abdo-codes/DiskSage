@@ -92,7 +92,7 @@ struct GeneratedFileInventory: Sendable {
                     break
                 }
                 let name: String? = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
-                    pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) { String(validatingUTF8: $0) }
+                    pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) { String(validatingCString: $0) }
                 }
                 guard let name else { throw FeatureFailure(message: "A filename could not be verified.") }
                 if name == "." || name == ".." { continue }

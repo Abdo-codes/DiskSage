@@ -16,7 +16,7 @@ struct ScheduleToolSocketTests {
         let repository = CleanupScheduleRepository(fileURL: root.appending(path: "settings/schedules.json"))
         let store = ManagementTestSupport.store(ManagementTestSupport.initial()) {
             $0.diskSage.preferences = { CleanupPreferences(agentPolicy: .automaticLowRisk) }
-            $0.management.identity = { try ScheduledFolderPolicy.identity(of: $0, home: fakeHome) }
+            $0.management.identity = { try ScheduledFolderPolicy.identity(of: $0, scope: $1, home: fakeHome) }
             $0.schedules.validate = { try ScheduledFolderPolicy.validate($0, home: fakeHome) }
             $0.management.receipt = { id in try repository.receipts().first { $0.request.requestID == id } }
             $0.management.save = { try repository.save($0, receipt: $1) }
@@ -45,6 +45,13 @@ struct ScheduleToolSocketTests {
             #expect(try repository.load().isEmpty)
             #expect(try repository.receipts().count == 4)
             #expect(FileManager.default.fileExists(atPath: folder.appending(path: "artifact").path))
+
+            // Low-risk schedules on .build/DerivedData with SwiftPM .git checkouts must use lowRisk scope when computing identity.
+            let checkoutGit = folder.appending(path: "checkouts/dep/.git", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: checkoutGit, withIntermediateDirectories: true)
+            let lowRiskWithGit = try await call("create_schedule", ["request_id": UUID().uuidString, "target": "folder",
+                "path": folder.path, "scope": "lowRisk", "frequency": "daily", "hour": 4, "minute": 0, "enabled": false], socket: socket)
+            #expect(lowRiskWithGit.error == nil && lowRiskWithGit.job?.phase == .succeeded)
         } catch { serving.cancel(); await serving.value; throw error }
         serving.cancel(); await serving.value
     }

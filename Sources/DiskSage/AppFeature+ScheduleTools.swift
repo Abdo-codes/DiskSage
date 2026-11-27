@@ -39,11 +39,11 @@ extension AppFeature {
             throw FeatureFailure(message: "Supply at least one schedule field to update.")
         }
         if args["path"] != nil && args["target"] == nil { throw FeatureFailure(message: "Set target=folder when supplying path.") }
+        if let scope = args["scope"]?.string { value.scope = CleanupSchedule.Scope(rawValue: scope)! }
         if let target = args["target"]?.string {
             value.folder = try scheduleFolder(target, path: args["path"]?.string)
-            value.folderIdentity = try management.identity(value.folder)
+            value.folderIdentity = try management.identity(value.folder, value.scope)
         }
-        if let scope = args["scope"]?.string { value.scope = CleanupSchedule.Scope(rawValue: scope)! }
         if let frequency = args["frequency"]?.string {
             value.frequency = CleanupSchedule.Frequency(rawValue: frequency)!
             if value.frequency == .once {

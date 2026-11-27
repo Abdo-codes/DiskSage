@@ -15,6 +15,15 @@ struct CleanupHistoryView: View {
             }
             .padding(18)
             Divider()
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                Divider()
+            }
             List(model.recentActivity) { run in
                 DisclosureGroup {
                     CleanupRunDetails(run: run)

@@ -5,7 +5,7 @@ struct ToolManagementClient: Sendable {
     var settings: @Sendable () -> [String: ToolValue]
     var applySettings: @Sendable ([String: ToolValue]) async throws -> Void
     var grantConsent: @Sendable (AgentProvider) -> Void
-    var identity: @Sendable (URL) throws -> FileIdentity
+    var identity: @Sendable (URL, CleanupSchedule.Scope) throws -> FileIdentity
     var receipt: @Sendable (UUID) throws -> ToolMutationReceipt?
     var save: @Sendable ([CleanupSchedule], ToolMutationReceipt) throws -> Void
     var read: @Sendable (String, [String: ToolValue]) async throws -> ToolValue
@@ -23,7 +23,7 @@ extension ToolManagementClient: DependencyKey {
         applySettings: { patch in try await MainActor.run { try ToolSettings.apply(patch) } },
         grantConsent: { provider in
             if let key = provider.consentKey { UserDefaults.standard.set(true, forKey: key) }
-        }, identity: { try ScheduledFolderPolicy.identity(of: $0) },
+        }, identity: { try ScheduledFolderPolicy.identity(of: $0, scope: $1) },
         receipt: { id in try CleanupScheduleRepository.standard.receipts().first { $0.request.requestID == id } },
         save: { try CleanupScheduleRepository.standard.save($0, receipt: $1) },
         read: { name, args in
@@ -87,7 +87,7 @@ extension ToolManagementClient: DependencyKey {
             FileManager.default.homeDirectoryForCurrentUser
         })
     static let testValue = Self(settings: { ToolSettings.entries.mapValues(\.fallback) },
-        applySettings: { _ in }, grantConsent: { _ in }, identity: { _ in FileIdentity(device: 1, inode: 2) },
+        applySettings: { _ in }, grantConsent: { _ in }, identity: { _, _ in FileIdentity(device: 1, inode: 2) },
         receipt: { _ in nil }, save: { _, _ in }, read: { _, _ in .array([]) }, present: { _, _ in },
         keepPaths: { _ in },
         readProjectCacheRules: {

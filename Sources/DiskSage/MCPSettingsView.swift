@@ -17,5 +17,9 @@ struct MCPSettingsView: View {
             AgentToolSettingsView()
         }
         .formStyle(.grouped).padding(16)
+        .onAppear { openedAt = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .diskSageSettingsOpened)) { _ in
+            openedAt = Date()
+        }
     }
 }

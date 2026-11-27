@@ -4,14 +4,19 @@ import SwiftUI
 
 @main
 struct DiskSageApp {
+    static func isMCPLaunch(_ arguments: [String]) -> Bool {
+        DiskSageCLI.parse(arguments) == nil && arguments.first == "--mcp"
+    }
+
     @MainActor
     static func main() {
-        if CommandLine.arguments.dropFirst().contains("--mcp") {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if let command = DiskSageCLI.parse(arguments) {
+            DiskSageCLI.writeAndExit(DiskSageCLI.runSynchronously(command))
+        }
+        if isMCPLaunch(arguments) {
             MCPServer().run()
             return
-        }
-        if let command = DiskSageCLI.parse(Array(CommandLine.arguments.dropFirst())) {
-            DiskSageCLI.writeAndExit(DiskSageCLI.runSynchronously(command))
         }
         let app = NSApplication.shared
         let showOnboarding = MCPOnboardingPreferences.shouldAutoShow(hasExistingData: MCPOnboardingPreferences.hasExistingData)
@@ -146,7 +151,11 @@ final class DiskSageAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
             window.delegate = self
             settingsWindow = window
         }
+        let wasVisible = settingsWindow?.isVisible == true
         settingsWindow?.makeKeyAndOrderFront(nil)
+        if !wasVisible {
+            NotificationCenter.default.post(name: .diskSageSettingsOpened, object: nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 

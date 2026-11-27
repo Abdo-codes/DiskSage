@@ -6,7 +6,7 @@ struct CleanupFeedbackView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if model.isCleaning {
+            if model.isCleaningCaches {
                 HStack {
                     ProgressView().controlSize(.small)
                     Text("Deleting… \(model.cleanupCompletedCount) of \(model.cleanupTotalCount) folders completed")
@@ -17,6 +17,15 @@ struct CleanupFeedbackView: View {
                 Text("\(model.cleanupRemovedEntryCount.formatted()) files and folders removed · \(model.cleanupActiveItems.count) folders active")
                     .monospacedDigit().foregroundStyle(.secondary)
                 Text(model.cleanupCurrentItem).foregroundStyle(.secondary).lineLimit(1)
+            } else if model.worktrees.removing {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Removing approved Git worktrees (\(model.worktrees.activeRemoval?.items.count ?? 0)) in the Git Worktrees section…")
+                        .fontWeight(.medium)
+                    Spacer()
+                }
+                Text("Switch to Git Worktrees to view progress or cancel remaining rows.")
+                    .font(.caption).foregroundStyle(.secondary)
             } else if let report = model.cleanupReport {
                 let outcome = CleanupOutcome(report: report)
                 Label(outcome.title, systemImage: outcome.hasWarnings ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")

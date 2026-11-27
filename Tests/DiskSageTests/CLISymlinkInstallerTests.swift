@@ -63,4 +63,30 @@ struct CLISymlinkInstallerTests {
         #expect(CLISymlinkInstaller.isLocalBinOnPATH(env: ["PATH": "/usr/bin:\(localBin)"], home: f.base))
         #expect(!CLISymlinkInstaller.isLocalBinOnPATH(env: ["PATH": "/usr/bin:/usr/local/bin"], home: f.base))
     }
+
+    @Test func handlesRelativeSymlinksDanglingDiskSageSymlinksAndSymlinkedBinParent() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let realBinParent = try f.folder("real-bin")
+        let localDir = try f.folder(".local")
+        let localBin = localDir.appending(path: "bin")
+        try FileManager.default.createSymbolicLink(at: localBin, withDestinationURL: realBinParent)
+
+        let appBin = try f.folder("app").appending(path: "DiskSage")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: appBin)
+        #expect(Darwin.chmod(appBin.path, 0o755) == 0)
+
+        let link = CLISymlinkInstaller.linkURL(home: f.base)
+        // Relative symlink pointing to DiskSage is recognized as installed.
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "../app/DiskSage")
+        #expect(CLISymlinkInstaller.status(executableURL: appBin, home: f.base) == .installed(target: "../app/DiskSage"))
+
+        // Dangling symlink whose leaf is DiskSage is recognized as pointsElsewhere(isDiskSage: true) and safely replaced.
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/nonexistent/old/DiskSage")
+        #expect(CLISymlinkInstaller.status(executableURL: appBin, home: f.base)
+                == .pointsElsewhere(target: "/nonexistent/old/DiskSage", isDiskSage: true))
+        _ = try CLISymlinkInstaller.install(executableURL: appBin, home: f.base)
+        #expect(CLISymlinkInstaller.status(executableURL: appBin, home: f.base)
+                == .installed(target: appBin.standardizedFileURL.resolvingSymlinksInPath().path))
+    }
 }

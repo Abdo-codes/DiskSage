@@ -51,4 +51,27 @@ struct DashboardPresentationTests {
         #expect(model.isCleaning == deleting)
         if deleting { #expect(model.errorMessage != nil) }
     }
+
+    @Test func dashboardPresentationRoutesPrimaryActionToWorktreesWhenWorktreeActivityOrConfirmationIsActive() {
+        var confirming = AppFeature.State()
+        confirming.worktrees.pending = WorktreePreview(items: [])
+        #expect(confirming.dashboardPresentation.awaitingConfirmation)
+        #expect(confirming.dashboardPresentation.primaryAction == .confirmCleanup)
+        #expect(confirming.dashboardPresentation.reviewSection == "worktrees")
+
+        var removing = AppFeature.State()
+        removing.worktrees.removing = true
+        #expect(removing.dashboardPresentation.primaryAction == .cleanupProgress)
+        #expect(removing.dashboardPresentation.reviewSection == "worktrees")
+        #expect(removing.isCleaning && !removing.isCleaningCaches)
+
+        var loading = AppFeature.State()
+        loading.worktrees.loading = true
+        #expect(loading.dashboardPresentation.primaryAction == .scanProgress)
+        #expect(loading.dashboardPresentation.reviewSection == "worktrees")
+
+        var idle = AppFeature.State()
+        idle.lastScanDate = Date()
+        #expect(idle.dashboardPresentation.reviewSection == "caches")
+    }
 }

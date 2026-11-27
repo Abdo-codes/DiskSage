@@ -208,4 +208,26 @@ struct KeepRulesTests {
         #expect(scanningStore.candidates.map(\.id) == [unrelated.id])
         #expect(scanningStore.selection == [unrelated.id])
     }
+
+    @Test func rejectsHomeRootDotSlashAndCarriageReturnAndValidatesThroughToolSettings() throws {
+        let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+        #expect(KeepRules.invalidPaths("~/", home: home) == ["~/"])
+        #expect(KeepRules.invalidPaths("~/.", home: home) == ["~/."])
+        #expect(KeepRules.invalidPaths("/.", home: home) == ["/."])
+        #expect(KeepRules.invalidPaths("/tmp/a\rrelative", home: home) == ["relative"])
+        #expect(!KeepRules.canRepresent(home, home: home))
+        #expect(KeepRules.parse(paths: "~/\n/.\n~/Developer/app", simulatorNames: "", home: home).paths == ["/Users/someone/Developer/app"])
+
+        try ToolSettings.validate(["keep_paths": .string("~/Developer/app\n/private/tmp/keep"),
+                                   "keep_simulator_names": .string("lane-*, qa-*")])
+        #expect(throws: FeatureFailure.self) {
+            try ToolSettings.validate(["keep_paths": .string("~/")])
+        }
+        #expect(throws: FeatureFailure.self) {
+            try ToolSettings.validate(["keep_paths": .string("/.")])
+        }
+        #expect(throws: FeatureFailure.self) {
+            try ToolSettings.validate(["keep_paths": .string("/private/tmp/a\rrelative")])
+        }
+    }
 }

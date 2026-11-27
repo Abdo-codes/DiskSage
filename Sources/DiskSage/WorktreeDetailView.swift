@@ -5,9 +5,21 @@ struct WorktreeDetailView: View {
     let item: WorktreeInspection
     let protected: Bool
     let busy: Bool
-    @State var integration: String
+    let integrationRef: String
+    @State private var integration: String
     var setIntegration: (String) -> Void
     var protect: (Bool) -> Void
+
+    init(item: WorktreeInspection, protected: Bool, busy: Bool, integration: String,
+         setIntegration: @escaping (String) -> Void, protect: @escaping (Bool) -> Void) {
+        self.item = item
+        self.protected = protected
+        self.busy = busy
+        self.integrationRef = integration
+        self._integration = State(initialValue: integration)
+        self.setIntegration = setIntegration
+        self.protect = protect
+    }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -57,6 +69,9 @@ struct WorktreeDetailView: View {
                 Text("Local branches are not a remote backup. Shared stashes are untouched and do not prove that checkout files were saved.")
                     .font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+        }
+        .onChange(of: integrationRef) { _, updated in
+            integration = updated
         }
     }
     @ViewBuilder private func paths(_ title: String, _ values: [String]) -> some View {

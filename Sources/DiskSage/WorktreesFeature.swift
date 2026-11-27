@@ -147,14 +147,18 @@ struct WorktreesFeature {
                     }
                 case let .addRoot(path):
                     guard !state.isBusy else { return .none }
+                    state.error = nil
                     let root = CleanupPath.fileURL(URL(fileURLWithPath: path)).path
                     _ = try WorktreePathGuard.identity(root)
                     guard root != "/", !["/Users", "/Volumes", "/private", "/System"].contains(root) else { throw FeatureFailure(message: "Choose a specific repository or projects folder.") }
-                    if !state.configuration.roots.contains(root) { state.configuration.roots.append(root) }
-                    try client.saveConfiguration(state.configuration)
+                    var configuration = state.configuration
+                    if !configuration.roots.contains(root) { configuration.roots.append(root) }
+                    try client.saveConfiguration(configuration)
+                    state.configuration = configuration
                     return .send(.load)
                 case let .removeRoot(path):
                     guard !state.isBusy else { return .none }
+                    state.error = nil
                     var configuration = state.configuration
                     configuration.roots.removeAll { $0 == path }
                     try client.saveConfiguration(configuration)
@@ -167,11 +171,15 @@ struct WorktreesFeature {
                     return .send(.load)
                 case let .setIntegration(common, ref):
                     guard !state.isBusy else { return .none }
+                    state.error = nil
                     guard ref.isEmpty || ref.hasPrefix("refs/") && !ref.contains("\0") && !ref.contains("\n") else {
                         throw FeatureFailure(message: "Use a full reference, for example refs/heads/main.")
                     }
-                    state.configuration.integrationRefs[common] = ref.isEmpty ? nil : ref
-                    try client.saveConfiguration(state.configuration); return .send(.load)
+                    var configuration = state.configuration
+                    configuration.integrationRefs[common] = ref.isEmpty ? nil : ref
+                    try client.saveConfiguration(configuration)
+                    state.configuration = configuration
+                    return .send(.load)
                 case let .select(ids):
                     state.selection = ids.intersection(Set(state.items.filter(\.canRequestRemoval).map(\.id)))
                 case .reviewUnused:
@@ -185,6 +193,7 @@ struct WorktreesFeature {
                     state.selection.formUnion(preview.items.map(\.id))
                 case .preview:
                     guard !state.isBusy, !state.selection.isEmpty else { return .none }
+                    state.error = nil
                     let items = state.reviewItems.filter { state.selection.contains($0.id) }.map(WorktreeQuickCleanup.compactForReview)
                     guard !items.isEmpty else { return .none }
                     guard items.count <= WorktreeQuickCleanup.batchLimit else { throw FeatureFailure(message: "Review up to 300 checkouts at a time.") }
@@ -193,10 +202,14 @@ struct WorktreesFeature {
                     state.pending = WorktreePreview(id: uuid(), items: items)
                 case let .setProtected(id, protected):
                     guard !state.isBusy, let item = state.reviewItems.first(where: { $0.id == id }) else { return .none }
+                    state.error = nil
                     if !protected {
                         state.pending = WorktreePreview(id: uuid(), items: [item], protectionChange: false)
                     } else {
-                        state.configuration.protectedIDs.insert(id); try client.saveConfiguration(state.configuration)
+                        var configuration = state.configuration
+                        configuration.protectedIDs.insert(id)
+                        try client.saveConfiguration(configuration)
+                        state.configuration = configuration
                         return .send(.load)
                     }
                 case .cancelQueued:

@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import os
 import Testing
 @testable import DiskSage
 
@@ -239,5 +240,48 @@ struct GeneratedCleanupTests {
             #expect(partial.removedFiles == 1)
         }
         #expect(FileManager.default.fileExists(atPath: movedRoot.appending(path: "release/b.o").path))
+    }
+
+    @Test func periodicActivityRecheckRestoresReadOnlyParentBeforeCheckingAndStopsWhenActive() throws {
+        let f = try GeneratedCleanupFixture(); defer { f.remove() }
+        try f.write("debug/a.o")
+        try f.write("debug/b.o")
+        let debugDir = f.root.appending(path: "debug")
+        #expect(chmod(debugDir.path, 0o555) == 0)
+        defer { chmod(debugDir.path, 0o755) }
+
+        let target = try #require(try f.candidate())
+        var clock = Date(timeIntervalSinceReferenceDate: 1_000)
+        let activityCalls = OSAllocatedUnfairLock(initialState: 0)
+        do {
+            try GeneratedFileDeleter.delete(
+                target,
+                policy: SafetyPolicy(home: f.home, now: f.now),
+                activity: {
+                    let count = activityCalls.withLock { $0 += 1; return $0 }
+                    // Third call is the periodic >= 2s recheck after removing a.o.
+                    if count >= 3 {
+                        var dirInfo = stat()
+                        #expect(lstat(debugDir.path, &dirInfo) == 0)
+                        #expect(dirInfo.st_mode & 0o777 == 0o555)
+                        return CleanupActivity(paths: [debugDir.path])
+                    }
+                    return .idle
+                },
+                now: { clock },
+                beforeEntry: { index in
+                    if index == 1 { clock = clock.addingTimeInterval(3) }
+                },
+                entryRemoved: {}
+            )
+            Issue.record("Expected PartialCleanupFailure when periodic recheck sees activity")
+        } catch let partial as PartialCleanupFailure {
+            #expect(partial.removedFiles == 1)
+        }
+        #expect(activityCalls.withLock { $0 } == 3)
+        #expect(!f.exists("debug/a.o") && f.exists("debug/b.o"))
+        var finalInfo = stat()
+        #expect(lstat(debugDir.path, &finalInfo) == 0)
+        #expect(finalInfo.st_mode & 0o777 == 0o555)
     }
 }

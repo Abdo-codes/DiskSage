@@ -43,7 +43,7 @@ struct ScheduleEditorView: View {
                     .keyboardShortcut(.defaultAction).disabled(!hasFolder)
             }.padding(16)
         }
-        .frame(width: 520, height: 600)
+        .frame(minWidth: 500, idealWidth: 520, minHeight: 460, idealHeight: 540)
         .onAppear {
             if let existing { value = existing; hasFolder = true }
         }
@@ -62,8 +62,12 @@ struct ScheduleEditorView: View {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
         panel.prompt = "Choose folder"
-        panel.begin { response in
-            if response == .OK, let folder = panel.url { useFolder(folder) }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK, let folder = panel.url { useFolder(folder) }
+            }
+        } else if panel.runModal() == .OK, let folder = panel.url {
+            useFolder(folder)
         }
     }
 

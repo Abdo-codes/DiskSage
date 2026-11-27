@@ -60,7 +60,8 @@ struct AppFeature {
 
         var isScanning: Bool { operation == .scanning || operation == .automaticScan }
         var isAdvising: Bool { operation == .advising }
-        var isCleaning: Bool { operation == .cleaning || operation == .automaticCleanup || worktrees.removing }
+        var isCleaningCaches: Bool { operation == .cleaning || operation == .automaticCleanup }
+        var isCleaning: Bool { isCleaningCaches || worktrees.removing }
         var isBusy: Bool { operation != .idle || pendingDeletionRequest != nil || pendingManagementApproval != nil || worktrees.isBusy }
         var lowRiskCandidates: [CleanupCandidate] { candidates.filter { $0.risk == .low } }
         var selectedCandidates: [CleanupCandidate] { candidates.filter { selection.contains($0.id) } }

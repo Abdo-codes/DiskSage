@@ -4,6 +4,8 @@ import SwiftUI
 
 struct MCPConnectionSetupView: View {
     var instructions = MCPConnectionInstructions.current
+    @AppStorage("claudeExecutablePath") private var claudePath = ""
+    @AppStorage("codexExecutablePath") private var codexPath = ""
     @State private var store = Store(initialState: MCPIntegrationFeature.State()) { MCPIntegrationFeature() }
 
     var body: some View {
@@ -29,7 +31,7 @@ struct MCPConnectionSetupView: View {
             Text("MCP clients can read paths and logs. Cleanup follows your MCP access policy. No separate skill package is required.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: instructions.executablePath) { refresh() }
+        .task(id: "\(instructions.executablePath)|\(claudePath)|\(codexPath)") { refresh() }
     }
 
     private func refresh() {

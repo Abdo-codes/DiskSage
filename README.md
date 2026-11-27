@@ -86,7 +86,7 @@ empty, symlinked, disallowed, or running-executable targets are excluded.
 | Projects under `~/Developer`, `~/Documents/Codex`, Codex visualizations and temporary builds | The same generated-file rules, discovered recursively |
 | Git-verified project caches (`node_modules`, `.venv`, `target`, `_build`, `.next`, `vendor/bundle`, etc.) under `~/Developer`, `~/Documents/Codex`, `mise`-tracked projects, and configured extra roots | Git-ignored directories with zero tracked files, matching project markers, no nested Git repos or protected `refuse_inside` paths (such as Mix releases), and at least 24 hours of project quiet time (Git + Claude Code transcripts); customizable in **Settings → General & Safety → Project Cache Rules** or `~/.config/disksage/rules.json` |
 | Tool-native global caches (`brew`, `uv`, `mise`, `pnpm`, `pip`, `bun >= 1.4.4`, Yarn 1) | Cleaned by the tool's own verified executable from `$HOME` without a shell (Yarn 2+ zero-install caches stay protected) |
-| Ecosystem global caches (`~/.cargo/registry`, `~/.gradle/caches`, `~/.m2/repository`, `~/Library/Caches/CocoaPods`, `~/Library/Caches/ms-playwright`, `~/.cache/puppeteer`) | Directory contents only; Maven repos containing `maven-metadata-local.xml` are refused, sibling credentials/Git checkouts stay, and Playwright/Puppeteer browsers are **Review** items |
+| Ecosystem global caches (`~/.cargo/registry`, `~/.gradle/caches`, `~/.m2/repository`, `~/Library/Caches/CocoaPods`, `~/Library/Caches/org.swift.swiftpm/{manifests,repositories}`, `~/Library/Caches/ms-playwright`, `~/.cache/puppeteer`, `~/.cache/huggingface/{hub,xet}`, `~/Library/Caches/codex-runtimes`, app `.ShipIt`/`-updater` caches) | Directory contents only; Maven repos containing `maven-metadata-local.xml` are refused, Hugging Face auth tokens/stored config stay, sibling credentials/Git checkouts stay, and Playwright/Puppeteer browsers and Hugging Face weights are **Review** items |
 | npm and Firebase CLI caches | Downloaded content payloads |
 | Go build cache | Recognizable compiled payloads; test output and action metadata stay |
 | Go module, SwiftPM binary and Bazel repository downloads | Recognized download files; Bazel archives require matching SHA-256 |
@@ -271,7 +271,7 @@ app. It verifies client connectivity, independently of advisor sign-in or quota.
   low-risk targets without another prompt.
 
 This policy is separate from low-disk automation and metadata consent.
-See the [complete MCP tool contract](docs/MCP.md) for all 34 tools and examples.
+See the [complete MCP tool contract](docs/MCP.md) for all 36 tools and examples.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
