@@ -13,7 +13,7 @@ enum TemporaryBuildInspector {
     /// Nothing inside a live Claude session is offered, not even compiled files.
     static func scan(discovered: [URL], activity: CleanupActivity, now: Date = Date(),
                      home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                     extraFolders: () -> [URL] = { looseBundles() + ClaudeSessionActivity.scratchpads() + AgentWorkspaceDiscovery.folders() }) -> ScanResult {
+                     extraFolders: (() -> [URL])? = nil) -> ScanResult {
         let sessions = ClaudeSessionActivity.Cache(activity: activity, now: now)
         var result = ScanResult()
         for url in discovered where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
@@ -26,7 +26,8 @@ enum TemporaryBuildInspector {
                 result.generatedRoots.append(url)
             }
         }
-        for url in extraFolders() where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
+        let extra = extraFolders?() ?? (looseBundles() + ClaudeSessionActivity.scratchpads() + AgentWorkspaceDiscovery.folders(home: home))
+        for url in extra where !Task.isCancelled && !sessions.isInsideLiveSession(url) {
             if let candidate = inspect(url, activity: activity, now: now, home: home) { result.candidates.append(candidate) }
         }
         var unique = Set<String>()

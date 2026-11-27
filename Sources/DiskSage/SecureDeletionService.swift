@@ -42,6 +42,8 @@ struct CleanupService: Sendable {
 
     init(logger: CleanupLogger = .shared, maximumWorkers: Int = 4,
          home: URL = FileManager.default.homeDirectoryForCurrentUser,
+         now: @escaping @Sendable () -> Date = Date.init,
+         activity: @escaping @Sendable () throws -> CleanupActivity = { try CleanupActivity.capture() },
          remove: Remove? = nil, writeEvent: WriteEvent? = nil) {
         let home = CleanupPath.fileURL(home)
         self.logger = logger
@@ -51,26 +53,27 @@ struct CleanupService: Sendable {
             // such as older device symbols whose newer version was deleted, still gets the full check and fails it.
             let wholeFolder = candidate.deletionMode == .item && TemporaryBuildOutput.kind(of: candidate.url, home: home) != nil
             let ecosystemCache = candidate.deletionMode == .contents && EcosystemCacheInventory.matching(candidate.url, home: home) != nil
-            try SafetyPolicy(home: home).validate(candidate)
+            let currentDate = now()
+            try SafetyPolicy(home: home, now: currentDate).validate(candidate)
             if candidate.deletionMode == .generatedFiles {
-                return try GeneratedFileDeleter.delete(candidate, policy: SafetyPolicy(home: home), entryRemoved: entryRemoved)
+                return try GeneratedFileDeleter.delete(candidate, policy: SafetyPolicy(home: home, now: currentDate), activity: activity, now: now, entryRemoved: entryRemoved)
             } else if candidate.deletionMode == .simulatorDevice {
-                try SimulatorInventory.delete(candidate, activity: try CleanupActivity.capture(), home: home)
+                try SimulatorInventory.delete(candidate, activity: try activity(), home: home)
             } else if candidate.deletionMode == .simulatorRuntime {
-                try SimulatorRuntimeInventory.delete(candidate, activity: try CleanupActivity.capture(), home: home)
+                try SimulatorRuntimeInventory.delete(candidate, activity: try activity(), home: home)
             } else if candidate.deletionMode == .toolCommand {
-                return try ToolCacheInventory.clean(candidate, activity: try CleanupActivity.capture(), home: home)
+                return try ToolCacheInventory.clean(candidate, activity: try activity(), home: home)
             } else if candidate.deletionMode == .projectCache {
-                let activity = try CleanupActivity.capture()
-                try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                let currentActivity = try activity()
+                try ProjectCacheInventory.verifyBeforeDeletion(candidate, activity: currentActivity, now: currentDate, home: home)
                 try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
             } else {
-                let activity = try CleanupActivity.capture()
-                try activity.requireIdle(candidate.url)
+                let currentActivity = try activity()
+                try currentActivity.requireIdle(candidate.url)
                 if ecosystemCache || EcosystemCacheInventory.matching(candidate.url, home: home) != nil {
-                    try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                    try EcosystemCacheInventory.verifyBeforeDeletion(candidate, activity: currentActivity, now: currentDate, home: home)
                 } else if wholeFolder || TemporaryBuildOutput.kind(of: candidate.url, home: home) != nil {
-                    try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: activity, home: home)
+                    try TemporaryBuildInspector.verifyBeforeDeletion(candidate, activity: currentActivity, now: currentDate, home: home)
                 }
                 try SecureFileDeleter.delete(candidate, entryRemoved: entryRemoved)
             }
@@ -119,7 +122,15 @@ enum SecureFileDeleter {
         }
         defer { close(targetFD) }
 
-        try removeChildren(of: targetFD, device: targetInfo.st_dev, displayPath: candidate.url.path, entryRemoved: entryRemoved)
+        var openedInfo = stat()
+        guard fstat(targetFD, &openedInfo) == 0,
+              (openedInfo.st_mode & S_IFMT) == S_IFDIR,
+              UInt64(openedInfo.st_dev) == candidate.identity.device,
+              UInt64(openedInfo.st_ino) == candidate.identity.inode else {
+            throw SecureDeletionError.identityChanged
+        }
+
+        try removeChildren(of: targetFD, device: openedInfo.st_dev, displayPath: candidate.url.path, entryRemoved: entryRemoved)
 
         if candidate.deletionMode == .item || candidate.deletionMode == .projectCache {
             if unlinkat(parentFD, targetName, AT_REMOVEDIR) != 0 {
@@ -194,7 +205,14 @@ enum SecureFileDeleter {
             }
         }
 
-        while let entry = readdir(directory) {
+        while true {
+            errno = 0
+            guard let entry = readdir(directory) else {
+                if errno != 0 {
+                    throw SecureDeletionError.systemCall("Reading \(displayPath)", errno)
+                }
+                break
+            }
             let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
                 pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
                     String(cString: $0)
@@ -216,6 +234,16 @@ enum SecureFileDeleter {
                     throw SecureDeletionError.systemCall("Opening \(displayPath)/\(name)", errno)
                 }
                 do {
+                    var opened = stat()
+                    guard fstat(childFD, &opened) == 0 else {
+                        throw SecureDeletionError.systemCall("Inspecting \(displayPath)/\(name)", errno)
+                    }
+                    guard opened.st_dev == device else {
+                        throw SecureDeletionError.crossedFilesystem("\(displayPath)/\(name)")
+                    }
+                    guard (opened.st_mode & S_IFMT) == S_IFDIR, opened.st_ino == info.st_ino else {
+                        throw SecureDeletionError.identityChanged
+                    }
                     try removeChildren(of: childFD, device: device, displayPath: "\(displayPath)/\(name)", entryRemoved: entryRemoved)
                     close(childFD)
                 } catch {

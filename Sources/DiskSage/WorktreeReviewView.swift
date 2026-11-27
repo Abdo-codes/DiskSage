@@ -81,10 +81,12 @@ struct WorktreeReviewView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    List {
+                    List(selection: $focused) {
                         ForEach(repositories, id: \.self) { repository in
                             Section(URL(fileURLWithPath: repository).deletingLastPathComponent().lastPathComponent) {
-                                ForEach(visibleItems.filter { $0.worktree.commonDirectory == repository }) { item in row(item) }
+                                ForEach(visibleItems.filter { $0.worktree.commonDirectory == repository }) { item in
+                                    row(item).tag(item.id)
+                                }
                             }
                         }
                     }.frame(minWidth: 250, idealWidth: 330)
@@ -127,23 +129,21 @@ struct WorktreeReviewView: View {
             Toggle("Select \(item.worktree.path)", isOn: Binding(get: { state.selection.contains(item.id) }, set: { selected in
                 var ids = state.selection; if selected { ids.insert(item.id) } else { ids.remove(item.id) }; send(.select(ids))
             })).labelsHidden().disabled(!item.canRequestRemoval)
-            Button {
-                focused = item.id
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.worktree.branch?.replacingOccurrences(of: "refs/heads/", with: "") ?? "Detached HEAD").fontWeight(.medium)
-                    Text(item.worktree.path).font(.caption).lineLimit(2).foregroundStyle(.secondary)
-                    Label(item.label, systemImage: item.worktree.main ? "house" : (item.canRemove ? "checkmark.shield" : "lock.shield"))
-                        .font(.caption).foregroundStyle(item.canRemove || item.worktree.main ? Color.secondary : Color.orange)
-                    if !item.worktree.main, let reason = item.blockers.first {
-                        Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(item.blockers.joined(separator: "\n"))
-                    }
-                    if item.blockers.isEmpty, item.requiresDiscardApproval, !item.isDisposable {
-                        Text("Select to review and explicitly discard this checkout’s data.").font(.caption).foregroundStyle(.orange)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-        }.padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.worktree.branch?.replacingOccurrences(of: "refs/heads/", with: "") ?? "Detached HEAD").fontWeight(.medium)
+                Text(item.worktree.path).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                Label(item.label, systemImage: item.worktree.main ? "house" : (item.canRemove ? "checkmark.shield" : "lock.shield"))
+                    .font(.caption).foregroundStyle(item.canRemove || item.worktree.main ? Color.secondary : Color.orange)
+                if !item.worktree.main, let reason = item.blockers.first {
+                    Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(item.blockers.joined(separator: "\n"))
+                }
+                if item.blockers.isEmpty, item.requiresDiscardApproval, !item.isDisposable {
+                    Text("Select to review and explicitly discard this checkout’s data.").font(.caption).foregroundStyle(.orange)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .padding(.vertical, 4)
+        .accessibilityAddTraits(focused == item.id ? .isSelected : [])
     }
     private func send(_ action: WorktreesFeature.Action) { model.store.send(.worktrees(action)) }
 
@@ -168,8 +168,12 @@ struct WorktreeReviewView: View {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Allow Inspection"
         panel.message = "Approve this folder for local Git worktree discovery. No files are removed by adding it."
-        panel.begin { response in
-            if response == .OK, let url = panel.url { send(.addRoot(url.path)) }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK, let url = panel.url { send(.addRoot(url.path)) }
+            }
+        } else if panel.runModal() == .OK, let url = panel.url {
+            send(.addRoot(url.path))
         }
     }
 }

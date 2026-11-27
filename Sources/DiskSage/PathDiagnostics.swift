@@ -99,13 +99,14 @@ enum PathDiagnostics {
                            reasons: ["A live Claude session still uses this folder."])
         }
         if TemporaryBuildOutput.kind(of: url, home: canonicalHome) != nil {
-            let temp = explainTemporaryBuild(url, activity: activity, now: now, home: canonicalHome)
+            let temp = explainTemporaryBuild(url, activity: activity, now: now, home: canonicalHome, keep: keep)
             if temp.verdict == .eligible { return temp }
             if let genRule = GeneratedCleanupScope.rule(for: url, home: canonicalHome, miseEnv: miseEnv) {
                 let generated = explainGenerated(url, rule: genRule, activity: activity, now: now,
                                                  home: canonicalHome, keep: keep)
                 if generated.verdict == .eligible { return generated }
-                return skipped(url, matcher: temp.matcher, reasons: temp.reasons + generated.reasons)
+                return skipped(url, matcher: temp.matcher, sizeBytes: temp.sizeBytes ?? generated.sizeBytes,
+                               reasons: temp.reasons + generated.reasons)
             }
             return temp
         }
@@ -391,19 +392,49 @@ enum PathDiagnostics {
                               sizeBytes: reportedSize, summary: summary, reasons: [])
     }
 
-    private static func explainTemporaryBuild(_ url: URL, activity: CleanupActivity, now: Date, home: URL) -> PathDiagnostic {
+    private static func explainTemporaryBuild(_ url: URL, activity: CleanupActivity, now: Date, home: URL, keep: KeepRules) -> PathDiagnostic {
         if let candidate = TemporaryBuildInspector.inspect(url, activity: activity, now: now, home: home) {
             return PathDiagnostic(path: url.path, verdict: .eligible, matcher: "Temporary build output",
                                   risk: riskKey(candidate.risk), sizeBytes: candidate.size, summary: candidate.reason, reasons: [])
         }
         var reasons: [String] = []
         if activity.contains(url) { reasons.append("A running process is using this build folder.") }
-        let probe = CleanupCandidate(url: url, name: url.lastPathComponent, category: .build, size: 1,
-                                     risk: .low, reason: "", deletionMode: .item)
-        do { try TemporaryBuildInspector.verifyBeforeDeletion(probe, activity: activity, now: now, home: home) }
-        catch { reasons.append(error.localizedDescription) }
+        if let session = ClaudeSessionActivity.session(containing: url),
+           ClaudeSessionActivity.isLive(session, activity: activity, now: now) {
+            reasons.append("A Claude session still uses this folder.")
+        }
+        var bytes: Int64?
+        if let kind = TemporaryBuildOutput.kind(of: url, home: home) {
+            do {
+                let survey = try FolderSurvey.read(url, gitAllowedUnder: TemporaryBuildOutput.gitAllowedUnder(kind))
+                try SwiftPMCheckoutGuard.verify(url, kind: kind)
+                bytes = survey.bytes
+                if survey.bytes == 0 {
+                    reasons.append("Folder has no reclaimable bytes.")
+                } else {
+                    let orphaned = kind == .xcodeProjectBuild && XcodeWorkspaceStatus.check(derivedDataFolder: url).isMissing
+                    if let risk = TemporaryBuildInspector.risk(kind, survey, now: now, orphanedWorkspace: orphaned) {
+                        var info = stat()
+                        if lstat(url.path, &info) == 0 {
+                            let candidate = CleanupCandidate(
+                                url: url, name: url.lastPathComponent, category: TemporaryBuildOutput.category(kind),
+                                size: survey.bytes, risk: risk, reason: "",
+                                identity: FileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)),
+                                deletionMode: .item
+                            )
+                            do { try SafetyPolicy(home: home, now: now, keep: keep).validate(candidate) }
+                            catch { reasons.append(error.localizedDescription) }
+                        }
+                    } else {
+                        reasons.append("Folder was modified too recently for whole-folder cleanup.")
+                    }
+                }
+            } catch {
+                reasons.append(error.localizedDescription)
+            }
+        }
         if reasons.isEmpty { reasons.append("Does not yet meet age, size, or workspace criteria for whole-folder cleanup.") }
-        return skipped(url, matcher: "Temporary build output", reasons: reasons)
+        return skipped(url, matcher: "Temporary build output", sizeBytes: bytes, reasons: reasons)
     }
 
     private static func explainProjectCache(
@@ -411,7 +442,9 @@ enum PathDiagnostics {
         claudeDir: URL?, miseEnv: MiseProjectDiscovery.Environment?, git: WorktreeGitProcess, minimumBytes: Int64
     ) -> PathDiagnostic? {
         let roots = ProjectCacheInventory.discoveryRoots(home: home, miseEnv: miseEnv)
-        guard let matchingRoot = roots.first(where: { url.path.hasPrefix($0.path + "/") }) else { return nil }
+        guard let matchingRoot = roots
+            .filter({ url.path.hasPrefix($0.path + "/") })
+            .max(by: { $0.path.count < $1.path.count }) else { return nil }
         let relFromRoot = String(url.path.dropFirst(matchingRoot.path.count + 1))
         if let skippedPart = relFromRoot.split(separator: "/").map(String.init).first(where: { rules.skip.contains($0) }) {
             // Built-in build folders (.build, DerivedData) are skipped here so GeneratedCleanupScope handles them.

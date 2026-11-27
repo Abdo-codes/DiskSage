@@ -98,4 +98,5 @@ extension Notification.Name {
     static let diskSageSettingsChanged = Self("DiskSage.settingsChanged")
     static let diskSageOpenWindow = Self("DiskSage.openWindow")
     static let diskSageProjectCacheRulesChanged = Self("DiskSage.projectCacheRulesChanged")
+    static let diskSageSettingsOpened = Self("DiskSage.settingsOpened")
 }

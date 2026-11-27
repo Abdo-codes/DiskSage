@@ -81,6 +81,7 @@ struct SettingsView: View {
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin = SMAppService.mainApp.status == .enabled
             refreshCLISymlinkStatus()
         }
     }

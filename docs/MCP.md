@@ -36,6 +36,7 @@ Check `isError` before parsing: connection errors can contain only text.
 | Cancel scanning/advice; decline confirmations | `cancel_operation`, `dismiss_confirmation` |
 | Create/list/edit/pause/resume/remove folder schedules | `create_schedule`, `list_schedules`, `update_schedule`, `pause_schedule`, `remove_schedule` |
 | Read/change all General, Agent, and MCP access settings | `get_settings`, `update_settings` |
+| Read/change custom project cache rules (`rules.json`) | `get_project_cache_rules`, `update_project_cache_rules` |
 | Provider configuration/readiness and model choices | `list_advisors`, `list_models` |
 | Ask Claude, Codex, Apple, or Ollama for advice | `request_advice` |
 | History and individual cleanup log events | `get_history`, `get_logs` |
@@ -208,7 +209,7 @@ Read `tools/list` for complete strict schemas. Common examples:
 | `get_logs` | Optional `run_id`, `offset`, `limit` |
 | `reveal_candidate` | Current `candidate_id` |
 | `explain_path` | Local `path` (absolute or `~/...`); read-only async job |
-| `open_window` | `window`: `dashboard`, `review`, `settings`, `schedules`, `history`, `logs`, `agent`, `mcp`, `general`, `about`, `onboarding`; `tools` remains an alias for `mcp` |
+| `open_window` | `window`: `dashboard`, `review`, `worktrees`, `settings`, `schedules`, `history`, `logs`, `agent`, `mcp`, `general`, `about`, `onboarding`; `tools` remains an alias for `mcp` |
 | `quit_app` | None besides the UUID; MCP is unavailable after quitting |
 
 `set_selection` with empty IDs and mode `replace` clears the selection. Adding

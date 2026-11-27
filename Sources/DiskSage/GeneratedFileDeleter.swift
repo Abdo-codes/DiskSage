@@ -43,6 +43,7 @@ enum GeneratedFileDeleter {
     @discardableResult
     static func delete(_ candidate: CleanupCandidate, policy: SafetyPolicy = SafetyPolicy(),
                        activity: Activity = { try CleanupActivity.capture() },
+                       now: () -> Date = Date.init,
                        beforeEntry: (Int) throws -> Void = { _ in }, entryRemoved: () -> Void) throws -> CleanupRemoval {
         try policy.validate(candidate)
         guard let snapshot = candidate.generatedSnapshot else { throw SecureDeletionError.identityChanged }
@@ -63,7 +64,7 @@ enum GeneratedFileDeleter {
         }
         try activity().requireIdle(candidate.url, rule: snapshot.rule)
         var removedBytes: Int64 = 0, removedFiles = 0
-        var lastActivityCheck = Date()
+        var lastActivityCheck = now()
         let uid = getuid()
         var rootFD: Int32 = -1
         var verifiedRootPath: String?
@@ -103,19 +104,20 @@ enum GeneratedFileDeleter {
             for (index, entry) in entries.enumerated() {
                 try Task.checkCancellation()
                 try beforeEntry(index)
-                if index > 0 && Date().timeIntervalSince(lastActivityCheck) >= 2 {
+                if index > 0 && now().timeIntervalSince(lastActivityCheck) >= 2 {
                     try closeCurrentParent()
                     closeRoot()
                     try activity().requireIdle(candidate.url, rule: snapshot.rule)
-                    lastActivityCheck = Date()
+                    lastActivityCheck = now()
                 }
                 guard let name = entry.parts.last, !name.isEmpty else {
                     throw SecureDeletionError.identityChanged
                 }
                 let parentParts = Array(entry.parts.dropLast())
-                let reuseCachedParent = currentParentParts == parentParts && currentParentFD >= 0 && verifiedParentPath != nil
+                let reuseCachedParent = currentParentParts == parentParts && currentParentFD >= 0
+                    && verifiedParentPath != nil && verifiedRootPath != nil
                 if reuseCachedParent {
-                    if let expectedRoot = verifiedRootPath, directoryPath(of: rootFD) != expectedRoot {
+                    guard directoryPath(of: rootFD) == verifiedRootPath else {
                         throw SecureDeletionError.identityChanged
                     }
                     guard directoryPath(of: currentParentFD) == verifiedParentPath else {
@@ -194,7 +196,9 @@ enum GeneratedFileDeleter {
     private static func directoryPath(of fd: Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
-        return String(cString: buffer)
+        let length = buffer.firstIndex(of: 0) ?? buffer.count
+        let bytes = buffer.prefix(length).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func openVerifiedRoot(for candidate: CleanupCandidate) throws -> Int32 {

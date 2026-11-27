@@ -161,7 +161,8 @@ enum CLISymlinkInstaller {
         if rawDestination.hasPrefix("/") {
             url = URL(fileURLWithPath: rawDestination)
         } else {
-            url = URL(fileURLWithPath: rawDestination, relativeTo: directory)
+            let realDirectory = directory.standardizedFileURL.resolvingSymlinksInPath()
+            url = URL(fileURLWithPath: rawDestination, relativeTo: realDirectory)
         }
         return url.standardizedFileURL.resolvingSymlinksInPath()
     }

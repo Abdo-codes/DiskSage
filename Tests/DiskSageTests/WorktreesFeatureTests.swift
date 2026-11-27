@@ -153,4 +153,38 @@ struct WorktreesFeatureTests {
         let coveredByHome = WorktreeReviewView.suggestedAgentRoots(home: f.base, approvedRoots: [f.base.path])
         #expect(coveredByHome.isEmpty)
     }
+
+    @Test func setWorktreeProtectedClearsStaleErrorAndSaveFailureNeverMutatesInMemoryConfiguration() async throws {
+        let item = Self.item()
+        var initial = AppFeature.State()
+        initial.worktrees.loaded = true
+        initial.worktrees.items = [item]
+        initial.worktrees.error = "Stale error from earlier action"
+        let saved = LockIsolated<[WorktreeConfiguration]>([])
+        let store = ManagementTestSupport.store(initial) {
+            $0.worktrees.saveConfiguration = { config in saved.withValue { $0.append(config) } }
+            $0.worktrees.configuration = { saved.value.last ?? WorktreeConfiguration() }
+            $0.worktrees.inventory = { _, _ in WorktreeInventory(items: [item]) }
+        }
+        let id = UUID()
+        let request = AgentToolRequest(action: .manage, requestID: id, tool: "set_worktree_protected",
+                                       arguments: ["request_id": .string(id.uuidString), "worktree_id": .string(item.id), "protected": .bool(true)])
+        await store.send(.agentToolRequest(request)).finish()
+        #expect(store.agentToolReply?.error == nil)
+        #expect(store.agentToolJobs[id]?.phase == .succeeded)
+        #expect(store.worktrees.error == nil)
+        #expect(store.worktrees.configuration.protectedIDs.contains(item.id))
+
+        // Failed saveConfiguration must roll back in-memory configuration across addRoot, setIntegration, and setProtected.
+        let failingStore = ManagementTestSupport.store(initial) {
+            $0.worktrees.saveConfiguration = { _ in throw FeatureFailure(message: "Disk full") }
+        }
+        await failingStore.send(.worktrees(.setIntegration(item.worktree.commonDirectory, "refs/heads/main"))).finish()
+        #expect(failingStore.worktrees.error == "Disk full")
+        #expect(failingStore.worktrees.configuration.integrationRefs.isEmpty)
+
+        await failingStore.send(.worktrees(.setProtected(item.id, true))).finish()
+        #expect(failingStore.worktrees.error == "Disk full")
+        #expect(failingStore.worktrees.configuration.protectedIDs.isEmpty)
+    }
 }

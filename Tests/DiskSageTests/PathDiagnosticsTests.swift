@@ -229,4 +229,45 @@ struct PathDiagnosticsTests {
         #expect(mountKeptDiag.verdict == .skipped)
         #expect(mountKeptDiag.reasons.contains { $0.contains("Keep rule") })
     }
+
+    @Test func explainsEmptyAndRecentXcodeArchivesAccuratelyWithoutChangedAfterScanMessage() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let emptyArchive = try f.folder("Library/Developer/Xcode/Archives/2026-10-01/Empty.xcarchive")
+        try Data().write(to: emptyArchive.appending(path: "Info.plist"))
+        let emptyDiag = PathDiagnostics.explain(emptyArchive.path, activity: .idle, now: f.later(hours: 48), home: f.base)
+        #expect(emptyDiag.verdict == .skipped)
+        #expect(emptyDiag.reasons.contains { $0.contains("no reclaimable bytes") })
+        #expect(!emptyDiag.reasons.contains { $0.contains("changed after the scan") })
+
+        try f.write("Library/Developer/Xcode/Archives/2026-10-01/Fresh.xcarchive/Info.plist", bytes: 64)
+        try f.write("Library/Developer/Xcode/Archives/2026-10-01/Fresh.xcarchive/Products/App.bin", bytes: 4_096)
+        let freshArchive = f.base.appending(path: "Library/Developer/Xcode/Archives/2026-10-01/Fresh.xcarchive")
+        let freshDiag = PathDiagnostics.explain(freshArchive.path, activity: .idle, now: f.later(hours: 2), home: f.base)
+        #expect(freshDiag.verdict == .skipped)
+        #expect(freshDiag.reasons.contains { $0.contains("modified too recently") })
+        #expect(!freshDiag.reasons.contains { $0.contains("changed after the scan") })
+        #expect((freshDiag.sizeBytes ?? 0) > 0)
+
+        // Recent DerivedData project folder falling through to generated-file check preserves surveyed sizeBytes.
+        let recentDD = try f.derivedData("Library/Developer/Xcode/DerivedData/RecentApp-abcdefghijklmnopqrstuvwxyzab")
+        let recentDDDiag = PathDiagnostics.explain(recentDD.path, activity: .idle, now: f.later(hours: 0.2), home: f.base)
+        #expect(recentDDDiag.verdict == .skipped)
+        #expect((recentDDDiag.sizeBytes ?? 0) > 0)
+    }
+
+    @Test func explainsNestedExtraRootUnderSkippedDirectoryUsingDeepestRoot() throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let nestedRoot = try f.folder("Developer/DerivedData/my-app")
+        let cache = try f.folder("Developer/DerivedData/my-app/node_modules")
+        try f.write("Developer/DerivedData/my-app/package.json", bytes: 32)
+        try f.write("Developer/DerivedData/my-app/node_modules/pkg.bin", bytes: 2_048)
+        let configURL = ProjectCacheRulesLoader.configURL(home: f.base)
+        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        _ = try ProjectCacheRulesLoader.save(.init(extraRoots: [nestedRoot.path]), to: configURL, home: f.base)
+
+        let diag = PathDiagnostics.explain(cache.path, activity: .idle, now: f.later(hours: 48), home: f.base,
+                                           minimumProjectBytes: 1)
+        #expect(!diag.reasons.contains { $0.contains("project-cache skip list") })
+        #expect(diag.matcher.contains("Project cache"))
+    }
 }

@@ -61,6 +61,18 @@ struct MCPServerTests {
         #expect((parsed["error"] as? [String: Any])?["code"] as? Int == -32700)
     }
 
+    @Test func validSocketSizedRepliesSurviveDoubleSerializationInMCP() throws {
+        // A ~45 KB reply passes LocalToolConnection.maximumFrameSize (64 KB) over control.sock
+        // and double-serializes to ~90+ KB in MCP (content[0].text + structuredContent).
+        let payload = String(repeating: "a", count: 45_000)
+        let server = MCPServer { _ in AgentToolReply(data: .string(payload)) }
+        _ = try response(server, method: "initialize")
+        let reply = try response(server, method: "tools/call", params: ["name": "get_dashboard", "arguments": [:]])
+        #expect(reply["error"] == nil)
+        let result = try #require(reply["result"] as? [String: Any])
+        #expect((result["structuredContent"] as? [String: Any])?["data"] as? String == payload)
+    }
+
     private func response(_ server: MCPServer, method: String, params: [String: Any] = [:]) throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": method, "params": params])
         let reply = try #require(server.respond(to: data))

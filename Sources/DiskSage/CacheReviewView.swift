@@ -23,7 +23,7 @@ struct CacheReviewView: View {
                 },
                 clearSelection: { model.selection = [] })
             Divider()
-            if model.isCleaning || model.cleanupReport != nil {
+            if model.isCleaningCaches || model.worktrees.removing || model.cleanupReport != nil {
                 CleanupFeedbackView(model: model)
                 Divider()
             }
@@ -119,9 +119,9 @@ struct CacheReviewView: View {
         .overlay {
             if visibleCandidates.isEmpty {
                 ContentUnavailableView(
-                    model.isScanning ? "Scanning…" : (model.isCleaning ? "Finishing cleanup…" : (model.candidates.isEmpty ? "No Candidates" : "No Matches")),
+                    model.isScanning ? "Scanning…" : (model.isCleaningCaches ? "Finishing cleanup…" : (model.candidates.isEmpty ? "No Candidates" : "No Matches")),
                     systemImage: model.isScanning ? "externaldrive" : "magnifyingglass",
-                    description: Text(model.isScanning ? "Finding generated files and caches." : (model.isCleaning ? "Completed items are removed as cleanup progresses." : "Try changing the search or risk filter, or run a new scan."))
+                    description: Text(model.isScanning ? "Finding generated files and caches." : (model.isCleaningCaches ? "Completed items are removed as cleanup progresses." : "Try changing the search or risk filter, or run a new scan."))
                 )
             }
         }

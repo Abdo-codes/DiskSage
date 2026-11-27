@@ -122,6 +122,55 @@ struct DiskScannerTests {
         #expect(expanded.count == 105)
     }
 
+    @Test func temporaryBuildScanHonorsCustomHomeAndCleanupServiceEndToEndDeletesRecentTargets() async throws {
+        let f = try TemporaryBuildFixture(); defer { f.remove() }
+        let future = f.later(hours: 48)
+        let swiftPMManifests = "Library/Caches/org.swift.swiftpm/manifests"
+        let hfHub = ".cache/huggingface/hub"
+        let shipIt = "Library/Caches/com.example.App.ShipIt"
+        let archive = "Library/Developer/Xcode/Archives/2026-10-01/OldApp.xcarchive"
+        let orphanedDD = "Library/Developer/Xcode/DerivedData/OrphanedApp-abcdefghijklmnopqrstuvwxyzab"
+
+        try f.write("\(swiftPMManifests)/manifest.db", bytes: 8_192)
+        try f.write("\(hfHub)/models--org--demo/weights.bin", bytes: 8_192)
+        try f.write(".cache/huggingface/token", bytes: 64)
+        try f.write("\(shipIt)/update.zip", bytes: 8_192)
+        try f.write("\(archive)/Info.plist", bytes: 64)
+        try f.write("\(archive)/Products/App.bin", bytes: 8_192)
+        try f.write("\(orphanedDD)/Build/Intermediates.noindex/a.o", bytes: 8_192)
+        let missingWorkspace = f.base.appending(path: "Developer/DeletedWorkspace/App.xcodeproj").path
+        let plistData = try PropertyListSerialization.data(fromPropertyList: ["WorkspacePath": missingWorkspace], format: .xml, options: 0)
+        try plistData.write(to: f.base.appending(path: "\(orphanedDD)/info.plist"))
+
+        // TemporaryBuildInspector.scan with default extraFolders must honor custom `home`.
+        let tempResult = TemporaryBuildInspector.scan(discovered: [], activity: .idle, now: future, home: f.base)
+        let ecoCandidates = EcosystemCacheInventory.candidates(activity: .idle, now: future, home: f.base, minimumBytes: 1)
+        let scanned = DiskScanner.validated(tempResult.candidates + ecoCandidates, home: f.base)
+
+        let expectedTargets = [
+            f.base.appending(path: swiftPMManifests),
+            f.base.appending(path: hfHub),
+            f.base.appending(path: shipIt),
+            f.base.appending(path: archive),
+            f.base.appending(path: orphanedDD),
+        ].map { CleanupPath.fileURL($0).path }
+
+        let matched = scanned.filter { expectedTargets.contains(CleanupPath.fileURL($0.url).path) }
+        #expect(Set(matched.map { CleanupPath.fileURL($0.url).path }) == Set(expectedTargets))
+
+        let logDir = f.base.appending(path: "logs")
+        let service = CleanupService(logger: CleanupLogger(directory: logDir), home: f.base, now: { future }, activity: { .idle })
+        let report = await service.delete(matched, trigger: .manual)
+        #expect(report.failures.isEmpty)
+        #expect(report.items.filter(\.succeeded).count == expectedTargets.count)
+        // Hugging Face auth token outside hub/xet stays untouched.
+        #expect(FileManager.default.fileExists(atPath: f.base.appending(path: ".cache/huggingface/token").path))
+        // Contents-mode caches keep their directory but are now empty; item-mode archive & orphaned DerivedData are removed.
+        #expect(!FileManager.default.fileExists(atPath: f.base.appending(path: archive).path))
+        #expect(!FileManager.default.fileExists(atPath: f.base.appending(path: orphanedDD).path))
+        #expect((try FileManager.default.contentsOfDirectory(atPath: f.base.appending(path: hfHub).path)).isEmpty)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DISKSAGE_LIVE_SCAN_TEST"] == "1"))
     func liveScanCandidatesPassPolicyOnThisMac() async throws {
         let candidates = try await DiskScanner().scan()

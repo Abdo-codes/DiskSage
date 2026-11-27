@@ -4,29 +4,59 @@ import SwiftUI
 struct MenuBarView: View {
     @Bindable var model: AppModel
     var heightLimit: CGFloat?
+    var onNaturalHeightChange: ((CGFloat) -> Void)?
     let openReview: () -> Void
     let openSettings: () -> Void
     let openHistory: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            DashboardHeader(status: model.pendingDeletionRequest != nil ? String(localized: "Confirmation required") : model.statusMessage,
+            DashboardHeader(status: model.dashboardPresentation.awaitingConfirmation ? String(localized: "Confirmation required") : model.statusMessage,
                             working: model.dashboardPresentation.isWorking, canScan: !model.isBusy,
                             rescan: model.scan, openSettings: openSettings)
                 .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
+                .background(HeightReporter(section: .header))
             if let heightLimit {
-                ScrollView { DashboardContent(model: model, openReview: openReview, openHistory: openHistory) }
-                    .scrollIndicators(.automatic)
-                    .frame(maxHeight: heightLimit)
+                ScrollView {
+                    DashboardContent(model: model, openReview: openReview, openHistory: openHistory)
+                        .background(HeightReporter(section: .content))
+                }
+                .scrollIndicators(.automatic)
+                .frame(maxHeight: heightLimit)
             } else {
                 DashboardContent(model: model, openReview: openReview, openHistory: openHistory)
+                    .background(HeightReporter(section: .content))
             }
             DashboardFooter(canQuit: !model.isCleaning, openLogs: model.openCleanupLogs)
+                .background(HeightReporter(section: .footer))
+        }
+        .onPreferenceChange(DashboardHeightKey.self) { heights in
+            guard heightLimit != nil, heights.count == 3 else { return }
+            let total = heights.values.reduce(0, +)
+            if total > 0 { onNaturalHeightChange?(total) }
         }
         .frame(width: 368, height: heightLimit)
         .fixedSize(horizontal: false, vertical: heightLimit == nil)
         .foregroundStyle(.primary)
         .background(DashboardTheme.readingSurface)
+    }
+}
+
+private enum DashboardHeightSection: Hashable { case header, content, footer }
+
+private struct DashboardHeightKey: PreferenceKey {
+    static let defaultValue: [DashboardHeightSection: CGFloat] = [:]
+    static func reduce(value: inout [DashboardHeightSection: CGFloat], nextValue: () -> [DashboardHeightSection: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+private struct HeightReporter: View {
+    let section: DashboardHeightSection
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(key: DashboardHeightKey.self, value: [section: proxy.size.height])
+        }
     }
 }
 
@@ -63,7 +93,7 @@ private struct DashboardActions: View {
                 if presentation.primaryAction == .scan {
                     model.scan()
                 } else {
-                    UserDefaults.standard.set("caches", forKey: "reviewSelectedSection")
+                    UserDefaults.standard.set(presentation.reviewSection, forKey: "reviewSelectedSection")
                     openReview()
                 }
             } label: {

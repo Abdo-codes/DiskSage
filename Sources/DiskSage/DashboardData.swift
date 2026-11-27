@@ -55,6 +55,7 @@ struct DashboardPresentation {
     let candidateCount: Int
     let lowRiskCount: Int
     let awaitingConfirmation: Bool
+    var reviewSection: String = "caches"
 
     var primaryAction: PrimaryAction {
         if awaitingConfirmation { return .confirmCleanup }
@@ -83,8 +84,15 @@ struct DashboardPresentation {
 
 extension AppFeature.State {
     var dashboardPresentation: DashboardPresentation {
-        DashboardPresentation(operation: worktrees.removing ? .cleaning : (worktrees.loading ? .scanning : operation), hasScanned: lastScanDate != nil,
-            candidateCount: candidates.count, lowRiskCount: lowRiskCandidates.count,
-            awaitingConfirmation: pendingDeletionRequest != nil || (worktrees.pending != nil && !worktrees.removing))
+        let worktreeConfirmation = pendingDeletionRequest == nil && worktrees.pending != nil && !worktrees.removing
+        let worktreeActive = pendingDeletionRequest == nil && !worktreeConfirmation && (worktrees.removing || worktrees.loading)
+        return DashboardPresentation(
+            operation: worktrees.removing ? .cleaning : (worktrees.loading ? .scanning : operation),
+            hasScanned: lastScanDate != nil,
+            candidateCount: candidates.count,
+            lowRiskCount: lowRiskCandidates.count,
+            awaitingConfirmation: pendingDeletionRequest != nil || (worktrees.pending != nil && !worktrees.removing),
+            reviewSection: (worktreeConfirmation || worktreeActive) ? "worktrees" : "caches"
+        )
     }
 }

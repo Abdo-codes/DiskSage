@@ -164,4 +164,14 @@ struct DiskSageCLITests {
         #expect(decoded.matchedCount == 115)
         #expect(decoded.candidates.count == 115)
     }
+
+    @Test func mcpLaunchDetectionDoesNotHijackCLISubcommands() {
+        #expect(DiskSageApp.isMCPLaunch(["--mcp"]))
+        #expect(!DiskSageApp.isMCPLaunch([]))
+        #expect(!DiskSageApp.isMCPLaunch(["scan", "-q", "--mcp"]))
+        #expect(!DiskSageApp.isMCPLaunch(["explain", "/tmp/--mcp"]))
+        #expect(!DiskSageApp.isMCPLaunch(["--help", "--mcp"]))
+        #expect(DiskSageCLI.parse(["scan", "-q", "--mcp"]) == .scan(.init(query: "--mcp")))
+        #expect(DiskSageCLI.parse(["explain", "/tmp/--mcp"]) == .explain(.init(path: "/tmp/--mcp")))
+    }
 }

@@ -6,12 +6,18 @@ final class MCPServer {
     private let call: ToolCall
     private var initialized = false
 
+    /// Stdout JSON-RPC embeds both `content[0].text` and `structuredContent`, so allow headroom
+    /// for any valid `AgentToolReply` that already passed `LocalToolConnection.maximumFrameSize`.
+    static let maximumResponseSize = LocalToolConnection.maximumFrameSize * 3
+
     init(call: @escaping ToolCall = { try LocalToolConnection.call($0) }) { self.call = call }
 
     func run() {
         // stdout is reserved exclusively for newline-delimited JSON-RPC.
         while let frame = try? LocalToolConnection.readFrame(STDIN_FILENO) {
-            if let reply = respond(to: frame) { try? LocalToolConnection.writeFrame(reply, to: STDOUT_FILENO) }
+            if let reply = respond(to: frame) {
+                try? LocalToolConnection.writeFrame(reply, to: STDOUT_FILENO, maximumSize: Self.maximumResponseSize)
+            }
         }
     }
 
@@ -112,7 +118,7 @@ final class MCPServer {
     }
     private func encode(_ object: [String: Any]) -> Data? {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
-        if data.count < LocalToolConnection.maximumFrameSize { return data }
+        if data.count < Self.maximumResponseSize { return data }
         return try? JSONSerialization.data(withJSONObject: error(-32603,
             "Tool response exceeded the frame limit. Use pagination and a smaller limit.", id: object["id"] ?? NSNull()))
     }
